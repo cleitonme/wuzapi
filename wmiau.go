@@ -629,6 +629,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			log.Info().Str("jid", jid.String()).Str("userid", txtid).Str("token", token).Msg("User information set")
 		}
 	case *events.StreamReplaced:
+		postmap["type"] = "StreamReplaced"
+		dowebhook = 1
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
