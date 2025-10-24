@@ -13,6 +13,80 @@ servers:
     description: Current host
 
 paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Endpoint para verificar se a API está rodando corretamente e obter estatísticas do serviço.
+      responses:
+        200:
+          description: API está saudável
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                    description: Status geral do serviço
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2025-01-15T10:30:00Z"
+                    description: Timestamp atual
+                  uptime:
+                    type: string
+                    example: "24h15m30s"
+                    description: Tempo que o serviço está rodando
+                  active_connections:
+                    type: integer
+                    example: 5
+                    description: Número total de conexões ativas gerenciadas
+                  total_users:
+                    type: integer
+                    example: 10
+                    description: Número total de usuários cadastrados
+                  connected_users:
+                    type: integer
+                    example: 4
+                    description: Número de usuários conectados ao WhatsApp
+                  logged_in_users:
+                    type: integer
+                    example: 3
+                    description: Número de usuários logados no WhatsApp
+                  memory_stats:
+                    type: object
+                    description: Estatísticas de uso de memória
+                    properties:
+                      alloc_mb:
+                        type: integer
+                        example: 45
+                        description: Memória alocada atualmente em MB
+                      total_alloc_mb:
+                        type: integer
+                        example: 250
+                        description: Total de memória alocada desde o início em MB
+                      sys_mb:
+                        type: integer
+                        example: 72
+                        description: Memória obtida do sistema em MB
+                      num_gc:
+                        type: integer
+                        example: 15
+                        description: Número de ciclos de garbage collection
+                  goroutines:
+                    type: integer
+                    example: 42
+                    description: Número de goroutines em execução
+                  version:
+                    type: string
+                    example: "3.0.0"
+                    description: Versão da API (opcional)
+                required:
+                  - status
+                  - timestamp
   /admin/users:
     get:
       tags:
