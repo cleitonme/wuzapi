@@ -2491,29 +2491,28 @@ func (s *server) CheckUser() http.HandlerFunc {
 	}
 
 	type User struct {
-		Query        string
-		IsInWhatsapp bool
-		JID          string
-		VerifiedName string
+		Query        string `json:"query"`
+		IsInWhatsapp bool   `json:"isInWhatsapp"`
+		JID          string `json:"jid"`
+		VerifiedName string `json:"verifiedName"`
 	}
 
 	type UserCollection struct {
-		Users []User
+		Users []User `json:"users"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
 		decoder := json.NewDecoder(r.Body)
 		var t checkUserStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		if err := decoder.Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
@@ -2523,29 +2522,62 @@ func (s *server) CheckUser() http.HandlerFunc {
 			return
 		}
 
-		resp, err := clientManager.GetWhatsmeowClient(txtid).IsOnWhatsApp(t.Phone)
+		// Verifica se os números estão no WhatsApp
+		resp, err := client.IsOnWhatsApp(t.Phone)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to check if users are on WhatsApp: %s", err)))
+			s.Respond(w, r, http.StatusInternalServerError,
+				errors.New(fmt.Sprintf("failed to check if users are on WhatsApp: %s", err)))
 			return
 		}
 
+		// Busca contatos armazenados localmente (para pegar PushName / FullName)
+		allContacts, _ := client.Store.Contacts.GetAllContacts(context.Background())
+
 		uc := new(UserCollection)
+
 		for _, item := range resp {
-			if item.VerifiedName != nil {
-				var msg = User{Query: item.Query, IsInWhatsapp: item.IsIn, JID: fmt.Sprintf("%s", item.JID), VerifiedName: item.VerifiedName.Details.GetVerifiedName()}
-				uc.Users = append(uc.Users, msg)
+			var verifiedName string
+
+			// 1️⃣ Se tiver VerifiedName oficial
+			if item.VerifiedName != nil && item.VerifiedName.Details.GetVerifiedName() != "" {
+				verifiedName = item.VerifiedName.Details.GetVerifiedName()
 			} else {
-				var msg = User{Query: item.Query, IsInWhatsapp: item.IsIn, JID: fmt.Sprintf("%s", item.JID), VerifiedName: ""}
-				uc.Users = append(uc.Users, msg)
+				// 2️⃣ Caso contrário, tenta buscar nome do contato salvo
+				if contact, exists := allContacts[item.JID]; exists {
+					if contact.PushName != "" {
+						verifiedName = contact.PushName
+					} else if contact.FullName != "" {
+						verifiedName = contact.FullName
+					}
+				}
 			}
+
+			// 3️⃣ Se ainda estiver vazio, fallback para string vazia
+			if verifiedName == "" {
+				verifiedName = ""
+			}
+
+			msg := User{
+				Query:        item.Query,
+				IsInWhatsapp: item.IsIn,
+				JID:          fmt.Sprintf("%s", item.JID),
+				VerifiedName: verifiedName,
+			}
+
+			uc.Users = append(uc.Users, msg)
 		}
-		responseJson, err := json.Marshal(uc)
+
+		responseJson, err := json.Marshal(map[string]interface{}{
+			"success": true,
+			"code":    200,
+			"data":    uc,
+		})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			return
 		}
-		return
+
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
