@@ -1204,7 +1204,24 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 			// Only save if there's meaningful content (including delete messages)
 			if textContent != "" || mediaLink != "" || (messageType != "text" && messageType != "reaction") || messageType == "delete" {
-				err := mycli.s.saveMessageToHistory(mycli.userID, evt.Info.Chat.String(), evt.Info.Sender.String(), evt.Info.ID, messageType, textContent, mediaLink, replyToMessageID)
+				// Serializar evt para JSON
+				evtJSON, err := json.Marshal(evt)
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal event to JSON")
+					evtJSON = []byte("{}") // fallback para JSON vazio em caso de erro
+				}
+
+				err = mycli.s.saveMessageToHistory(
+					mycli.userID,
+					evt.Info.Chat.String(),
+					evt.Info.Sender.String(),
+					evt.Info.ID,
+					messageType,
+					textContent,
+					mediaLink,
+					replyToMessageID,
+					string(evtJSON), // converter []byte para string
+				)
 				if err != nil {
 					log.Error().Err(err).Msg("Failed to save message to history")
 				} else {
