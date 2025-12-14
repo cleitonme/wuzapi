@@ -73,5 +73,5 @@ require (
 	rsc.io/qr v0.2.0 // indirect
 )
 
-// 🔥 IMPORTANTE: Substitui o whatsmeow original pelo private-meow com suporte a botões/listas
+🔥 IMPORTANTE: Substitui o whatsmeow original pelo private-meow com suporte a botões/listas
 replace go.mau.fi/whatsmeow => github.com/renatokeys/private-meow v0.0.0-20251214202541-c75edbca4aaf
