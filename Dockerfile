@@ -19,6 +19,7 @@ RUN go mod download
 
 COPY . .
 ENV CGO_ENABLED=1
+RUN go mod tidy
 RUN go build -o wuzapi
 
 FROM debian:bullseye-slim
