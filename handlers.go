@@ -1901,11 +1901,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 		}
 
 		msg := &waE2E.Message{
-			ViewOnceMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{
-					InteractiveMessage: interactiveMsg,
-				},
-			},
+			InteractiveMessage: interactiveMsg,
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(
@@ -2075,11 +2071,7 @@ func (s *server) SendList() http.HandlerFunc {
 		}
 
 		msg := &waE2E.Message{
-			ViewOnceMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{
-					InteractiveMessage: interactiveMsg,
-				},
-			},
+			InteractiveMessage: interactiveMsg,
 		}
 
 		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(
