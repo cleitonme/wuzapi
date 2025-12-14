@@ -1889,11 +1889,10 @@ func (s *server) SendButtons() http.HandlerFunc {
 			Body: &waE2E.InteractiveMessage_Body{
 				Text: proto.String(body),
 			},
-			// InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-			// 	Buttons: nativeFlowButtons,
-			// },
+			CarouselMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons: nativeFlowButtons,
+			},
 		}
-		_ = nativeFlowButtons
 
 		if t.Footer != "" {
 			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
@@ -2059,12 +2058,11 @@ func (s *server) SendList() http.HandlerFunc {
 			Body: &waE2E.InteractiveMessage_Body{
 				Text: proto.String(req.Desc),
 			},
-			// InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-			// 	Buttons:           nativeFlowButtons,
-			// 	MessageParamsJSON: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
-			// },
+			CarouselMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons:           nativeFlowButtons,
+				MessageParamsJSON: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
+			},
 		}
-		_ = nativeFlowButtons
 
 		if req.FooterText != "" {
 			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
