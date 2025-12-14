@@ -1893,6 +1893,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			// 	Buttons: nativeFlowButtons,
 			// },
 		}
+		_ = nativeFlowButtons
 
 		if t.Footer != "" {
 			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
@@ -2063,6 +2064,7 @@ func (s *server) SendList() http.HandlerFunc {
 			// 	MessageParamsJSON: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
 			// },
 		}
+		_ = nativeFlowButtons
 
 		if req.FooterText != "" {
 			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
