@@ -1889,7 +1889,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			Body: &waE2E.InteractiveMessage_Body{
 				Text: proto.String(body),
 			},
-			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			NativeFlow: &waE2E.InteractiveMessage_NativeFlowMessage{
 				Buttons: nativeFlowButtons,
 			},
 		}
@@ -2058,7 +2058,7 @@ func (s *server) SendList() http.HandlerFunc {
 			Body: &waE2E.InteractiveMessage_Body{
 				Text: proto.String(req.Desc),
 			},
-			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+			NativeFlow: &waE2E.InteractiveMessage_NativeFlowMessage{
 				Buttons:           nativeFlowButtons,
 				MessageParamsJSON: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
 			},
