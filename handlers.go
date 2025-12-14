@@ -2060,7 +2060,7 @@ func (s *server) SendList() http.HandlerFunc {
 			},
 			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
 				Buttons:           nativeFlowButtons,
-				MessageParamsJson: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
+				MessageParamsJSON: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
 			},
 		}
 
