@@ -1795,6 +1795,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 	type buttonStruct struct {
 		ButtonId   string `json:"ButtonId"`
 		ButtonText string `json:"ButtonText"`
+		ButtonUrl  string `json:"ButtonUrl,omitempty"`
 	}
 	type textStruct struct {
 		Phone   string         `json:"Phone"`
@@ -1864,20 +1865,37 @@ func (s *server) SendButtons() http.HandlerFunc {
 		// Create Native Flow Buttons (quick_reply)
 		var nativeFlowButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 		for _, item := range t.Buttons {
-			// Construir o JSON de parâmetros do botão
-			buttonParamsJSON, err := json.Marshal(map[string]string{
-				"display_text": item.ButtonText,
-				"id":           item.ButtonId,
-			})
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to marshal button params")
-				continue
-			}
+			// Check if it's a URL button
+			if item.ButtonUrl != "" {
+				buttonParamsJSON, err := json.Marshal(map[string]string{
+					"display_text": item.ButtonText,
+					"url":          item.ButtonUrl,
+					"merchant_url": item.ButtonUrl,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal button params for url")
+					continue
+				}
+				nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+					Name:             proto.String("cta_url"),
+					ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+				})
+			} else {
+				// quick_reply fallback
+				buttonParamsJSON, err := json.Marshal(map[string]string{
+					"display_text": item.ButtonText,
+					"id":           item.ButtonId,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal button params")
+					continue
+				}
 
-			nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
-				Name:             proto.String("quick_reply"),
-				ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
-			})
+				nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+					Name:             proto.String("quick_reply"),
+					ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+				})
+			}
 		}
 
 		// Create Interactive Message
