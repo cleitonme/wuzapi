@@ -1790,22 +1790,23 @@ func (s *server) SendLocation() http.HandlerFunc {
 	}
 }
 
-// Sends Buttons (not implemented, does not work)
+// Sends Buttons
 func (s *server) SendButtons() http.HandlerFunc {
-
 	type buttonStruct struct {
-		ButtonId   string
-		ButtonText string
+		ButtonId   string `json:"ButtonId"`
+		ButtonText string `json:"ButtonText"`
+		ButtonUrl  string `json:"ButtonUrl,omitempty"`
 	}
 	type textStruct struct {
-		Phone   string
-		Title   string
-		Buttons []buttonStruct
-		Id      string
+		Phone   string         `json:"Phone"`
+		Title   string         `json:"Title"`
+		Body    string         `json:"Body"`
+		Footer  string         `json:"Footer"`
+		Buttons []buttonStruct `json:"Buttons"`
+		Id      string         `json:"Id"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -1834,6 +1835,12 @@ func (s *server) SendButtons() http.HandlerFunc {
 			return
 		}
 
+		// Body is optional in original code, but highly recommended for InteractiveMessage
+		body := t.Body
+		if body == "" {
+			body = " "
+		}
+
 		if len(t.Buttons) < 1 {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
 			return
@@ -1855,34 +1862,81 @@ func (s *server) SendButtons() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		var buttons []*waE2E.ButtonsMessage_Button
-
+		// Create Native Flow Buttons (quick_reply)
+		var nativeFlowButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 		for _, item := range t.Buttons {
-			buttons = append(buttons, &waE2E.ButtonsMessage_Button{
-				ButtonID:       proto.String(item.ButtonId),
-				ButtonText:     &waE2E.ButtonsMessage_Button_ButtonText{DisplayText: proto.String(item.ButtonText)},
-				Type:           waE2E.ButtonsMessage_Button_RESPONSE.Enum(),
-				NativeFlowInfo: &waE2E.ButtonsMessage_Button_NativeFlowInfo{},
-			})
+			// Check if it's a URL button
+			if item.ButtonUrl != "" {
+				buttonParamsJSON, err := json.Marshal(map[string]string{
+					"display_text": item.ButtonText,
+					"url":          item.ButtonUrl,
+					"merchant_url": item.ButtonUrl,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal button params for url")
+					continue
+				}
+				nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+					Name:             proto.String("cta_url"),
+					ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+				})
+			} else {
+				// quick_reply fallback
+				buttonParamsJSON, err := json.Marshal(map[string]string{
+					"display_text": item.ButtonText,
+					"id":           item.ButtonId,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal button params")
+					continue
+				}
+
+				nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+					Name:             proto.String("quick_reply"),
+					ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+				})
+			}
 		}
 
-		msg2 := &waE2E.ButtonsMessage{
-			ContentText: proto.String(t.Title),
-			HeaderType:  waE2E.ButtonsMessage_EMPTY.Enum(),
-			Buttons:     buttons,
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, &waE2E.Message{ViewOnceMessage: &waE2E.FutureProofMessage{
-			Message: &waE2E.Message{
-				ButtonsMessage: msg2,
+		// Create Interactive Message
+		interactiveMsg := &waE2E.InteractiveMessage{
+			Header: &waE2E.InteractiveMessage_Header{
+				Title:              proto.String(t.Title),
+				HasMediaAttachment: proto.Bool(false),
 			},
-		}}, whatsmeow.SendRequestExtra{ID: msgid})
+			Body: &waE2E.InteractiveMessage_Body{
+				Text: proto.String(body),
+			},
+			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+					Buttons: nativeFlowButtons,
+				},
+			},
+		}
+
+		if t.Footer != "" {
+			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(t.Footer),
+			}
+		}
+
+		msg := &waE2E.Message{
+			InteractiveMessage: interactiveMsg,
+		}
+
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(
+			context.Background(),
+			recipient,
+			msg,
+			whatsmeow.SendRequestExtra{ID: msgid},
+		)
+
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message buttons sent (Interactive)")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1930,55 +1984,56 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		// Required fields validation - FooterText is optional
+		// Required fields validation
 		if req.Phone == "" || req.ButtonText == "" || req.Desc == "" || req.TopText == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing required fields: Phone, ButtonText, Desc, TopText"))
 			return
 		}
 
-		// Priority for Sections, but accepts List for compatibility
-		var sections []*waE2E.ListMessage_Section
+		// Prepare sections for Native Flow
+		var sectionsForJSON []map[string]interface{}
+
+		// Normalize input into sections structure
 		if len(req.Sections) > 0 {
 			for _, sec := range req.Sections {
-				var rows []*waE2E.ListMessage_Row
+				var rowsForJSON []map[string]interface{}
 				for _, item := range sec.Rows {
 					rowId := item.RowId
 					if rowId == "" {
 						rowId = item.Title // fallback
 					}
-					rows = append(rows, &waE2E.ListMessage_Row{
-						RowID:       proto.String(rowId),
-						Title:       proto.String(item.Title),
-						Description: proto.String(item.Desc),
+					rowsForJSON = append(rowsForJSON, map[string]interface{}{
+						"id":          rowId,
+						"title":       item.Title,
+						"description": item.Desc,
 					})
 				}
-				sections = append(sections, &waE2E.ListMessage_Section{
-					Title: proto.String(sec.Title),
-					Rows:  rows,
+				sectionsForJSON = append(sectionsForJSON, map[string]interface{}{
+					"title": sec.Title,
+					"rows":  rowsForJSON,
 				})
 			}
 		} else if len(req.List) > 0 {
-			var rows []*waE2E.ListMessage_Row
+			var rowsForJSON []map[string]interface{}
 			for _, item := range req.List {
 				rowId := item.RowId
 				if rowId == "" {
 					rowId = item.Title // fallback
 				}
-				rows = append(rows, &waE2E.ListMessage_Row{
-					RowID:       proto.String(rowId),
-					Title:       proto.String(item.Title),
-					Description: proto.String(item.Desc),
+				rowsForJSON = append(rowsForJSON, map[string]interface{}{
+					"id":          rowId,
+					"title":       item.Title,
+					"description": item.Desc,
 				})
 			}
 
-			// Debug: dynamic title: uses TopText if it exists, otherwise 'Menu'
 			sectionTitle := req.TopText
 			if sectionTitle == "" {
 				sectionTitle = "Menu"
 			}
-			sections = append(sections, &waE2E.ListMessage_Section{
-				Title: proto.String(sectionTitle),
-				Rows:  rows,
+			sectionsForJSON = append(sectionsForJSON, map[string]interface{}{
+				"title": sectionTitle,
+				"rows":  rowsForJSON,
 			})
 		} else {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("no section or list provided"))
@@ -1996,27 +2051,49 @@ func (s *server) SendList() http.HandlerFunc {
 			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
 		}
 
-		// Create the message with ListMessage
-		listMsg := &waE2E.ListMessage{
-			Title:       proto.String(req.TopText),
-			Description: proto.String(req.Desc),
-			ButtonText:  proto.String(req.ButtonText),
-			ListType:    waE2E.ListMessage_SINGLE_SELECT.Enum(),
-			Sections:    sections,
+		// Construct List Parameters JSON
+		listParamsJSON, err := json.Marshal(map[string]interface{}{
+			"title":    req.ButtonText,
+			"sections": sectionsForJSON,
+		})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to marshal list params"))
+			return
 		}
 
-		// Add footer only if provided
-		if req.FooterText != "" {
-			listMsg.FooterText = proto.String(req.FooterText)
+		// Create Native Flow Button for List
+		nativeFlowButtons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+			{
+				Name:             proto.String("single_select"),
+				ButtonParamsJSON: proto.String(string(listParamsJSON)),
+			},
 		}
 
-		// Try with ViewOnceMessage wrapper as some users report this helps with error 405
-		msg := &waE2E.Message{
-			ViewOnceMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{
-					ListMessage: listMsg,
+		// Create Interactive Message
+		interactiveMsg := &waE2E.InteractiveMessage{
+			Header: &waE2E.InteractiveMessage_Header{
+				Title:              proto.String(req.TopText),
+				HasMediaAttachment: proto.Bool(false),
+			},
+			Body: &waE2E.InteractiveMessage_Body{
+				Text: proto.String(req.Desc),
+			},
+			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+					Buttons:           nativeFlowButtons,
+					MessageParamsJSON: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
 				},
 			},
+		}
+
+		if req.FooterText != "" {
+			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(req.FooterText),
+			}
+		}
+
+		msg := &waE2E.Message{
+			InteractiveMessage: interactiveMsg,
 		}
 
 		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(
@@ -2030,10 +2107,10 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message list sent")
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message list sent (Interactive)")
 		response := map[string]interface{}{
 			"Details":   "Sent",
-			"Timestamp": resp.Timestamp,
+			"Timestamp": resp.Timestamp.Unix(),
 			"Id":        msgid,
 		}
 		responseJson, err := json.Marshal(response)
@@ -2044,6 +2121,8 @@ func (s *server) SendList() http.HandlerFunc {
 		}
 	}
 }
+
+
 
 // Sends a status text message
 func (s *server) SetStatusMessage() http.HandlerFunc {

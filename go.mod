@@ -72,3 +72,6 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
+
+//🔥 IMPORTANTE: Substitui o whatsmeow original pelo private-meow com suporte a botões/listas
+replace go.mau.fi/whatsmeow => github.com/renatokeys/private-meow v0.0.0-20251205220640-c75edbca4aaf

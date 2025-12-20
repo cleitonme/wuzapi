@@ -1,0 +1,318 @@
+// Sends Buttons
+func (s *server) SendButtons() http.HandlerFunc {
+	type buttonStruct struct {
+		ButtonId   string `json:"ButtonId"`
+		ButtonText string `json:"ButtonText"`
+	}
+	type textStruct struct {
+		Phone   string         `json:"Phone"`
+		Title   string         `json:"Title"`
+		Body    string         `json:"Body"`
+		Footer  string         `json:"Footer"`
+		Buttons []buttonStruct `json:"Buttons"`
+		Id      string         `json:"Id"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+
+		if clientManager.GetWhatsmeowClient(txtid) == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		msgid := ""
+		var resp whatsmeow.SendResponse
+
+		decoder := json.NewDecoder(r.Body)
+		var t textStruct
+		err := decoder.Decode(&t)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+			return
+		}
+
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
+			return
+		}
+
+		if t.Title == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Title in Payload"))
+			return
+		}
+
+		// Body is optional in original code, but highly recommended for InteractiveMessage
+		body := t.Body
+		if body == "" {
+			body = " "
+		}
+
+		if len(t.Buttons) < 1 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
+			return
+		}
+		if len(t.Buttons) > 3 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("buttons cant more than 3"))
+			return
+		}
+
+		recipient, ok := parseJID(t.Phone)
+		if !ok {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
+			return
+		}
+
+		if t.Id == "" {
+			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		// Create Native Flow Buttons (quick_reply)
+		var nativeFlowButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
+		for _, item := range t.Buttons {
+			// Construir o JSON de parâmetros do botão
+			buttonParamsJSON, err := json.Marshal(map[string]string{
+				"display_text": item.ButtonText,
+				"id":           item.ButtonId,
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to marshal button params")
+				continue
+			}
+
+			nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+				Name:             proto.String("quick_reply"),
+				ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+			})
+		}
+
+		// Create Interactive Message
+		interactiveMsg := &waE2E.InteractiveMessage{
+			Header: &waE2E.InteractiveMessage_Header{
+				Title:              proto.String(t.Title),
+				HasMediaAttachment: proto.Bool(false),
+			},
+			Body: &waE2E.InteractiveMessage_Body{
+				Text: proto.String(body),
+			},
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons: nativeFlowButtons,
+			},
+		}
+
+		if t.Footer != "" {
+			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(t.Footer),
+			}
+		}
+
+		msg := &waE2E.Message{
+			ViewOnceMessage: &waE2E.FutureProofMessage{
+				Message: &waE2E.Message{
+					InteractiveMessage: interactiveMsg,
+				},
+			},
+		}
+
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(
+			context.Background(),
+			recipient,
+			msg,
+			whatsmeow.SendRequestExtra{ID: msgid},
+		)
+
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			return
+		}
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message buttons sent (Interactive)")
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+		return
+	}
+}
+
+// SendList
+func (s *server) SendList() http.HandlerFunc {
+	type listItem struct {
+		Title string `json:"title"`
+		Desc  string `json:"desc"`
+		RowId string `json:"RowId"`
+	}
+	type section struct {
+		Title string     `json:"title"`
+		Rows  []listItem `json:"rows"`
+	}
+	type listRequest struct {
+		Phone      string     `json:"Phone"`
+		ButtonText string     `json:"ButtonText"`
+		Desc       string     `json:"Desc"`
+		TopText    string     `json:"TopText"`
+		Sections   []section  `json:"Sections"`
+		List       []listItem `json:"List"` // compatibility
+		FooterText string     `json:"FooterText"`
+		Id         string     `json:"Id,omitempty"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		if clientManager.GetWhatsmeowClient(txtid) == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req listRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+			return
+		}
+
+		// Required fields validation
+		if req.Phone == "" || req.ButtonText == "" || req.Desc == "" || req.TopText == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing required fields: Phone, ButtonText, Desc, TopText"))
+			return
+		}
+
+		// Prepare sections for Native Flow
+		var sectionsForJSON []map[string]interface{}
+
+		// Normalize input into sections structure
+		if len(req.Sections) > 0 {
+			for _, sec := range req.Sections {
+				var rowsForJSON []map[string]interface{}
+				for _, item := range sec.Rows {
+					rowId := item.RowId
+					if rowId == "" {
+						rowId = item.Title // fallback
+					}
+					rowsForJSON = append(rowsForJSON, map[string]interface{}{
+						"id":          rowId,
+						"title":       item.Title,
+						"description": item.Desc,
+					})
+				}
+				sectionsForJSON = append(sectionsForJSON, map[string]interface{}{
+					"title": sec.Title,
+					"rows":  rowsForJSON,
+				})
+			}
+		} else if len(req.List) > 0 {
+			var rowsForJSON []map[string]interface{}
+			for _, item := range req.List {
+				rowId := item.RowId
+				if rowId == "" {
+					rowId = item.Title // fallback
+				}
+				rowsForJSON = append(rowsForJSON, map[string]interface{}{
+					"id":          rowId,
+					"title":       item.Title,
+					"description": item.Desc,
+				})
+			}
+
+			sectionTitle := req.TopText
+			if sectionTitle == "" {
+				sectionTitle = "Menu"
+			}
+			sectionsForJSON = append(sectionsForJSON, map[string]interface{}{
+				"title": sectionTitle,
+				"rows":  rowsForJSON,
+			})
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("no section or list provided"))
+			return
+		}
+
+		recipient, ok := parseJID(req.Phone)
+		if !ok {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
+			return
+		}
+
+		msgid := req.Id
+		if msgid == "" {
+			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
+		}
+
+		// Construct List Parameters JSON
+		listParamsJSON, err := json.Marshal(map[string]interface{}{
+			"title":    req.ButtonText,
+			"sections": sectionsForJSON,
+		})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to marshal list params"))
+			return
+		}
+
+		// Create Native Flow Button for List
+		nativeFlowButtons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+			{
+				Name:             proto.String("single_select"),
+				ButtonParamsJSON: proto.String(string(listParamsJSON)),
+			},
+		}
+
+		// Create Interactive Message
+		interactiveMsg := &waE2E.InteractiveMessage{
+			Header: &waE2E.InteractiveMessage_Header{
+				Title:              proto.String(req.TopText),
+				HasMediaAttachment: proto.Bool(false),
+			},
+			Body: &waE2E.InteractiveMessage_Body{
+				Text: proto.String(req.Desc),
+			},
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons:           nativeFlowButtons,
+				MessageParamsJson: proto.String(""), // Pode ser necessário string vazia ou JSON vazio
+			},
+		}
+
+		if req.FooterText != "" {
+			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(req.FooterText),
+			}
+		}
+
+		msg := &waE2E.Message{
+			ViewOnceMessage: &waE2E.FutureProofMessage{
+				Message: &waE2E.Message{
+					InteractiveMessage: interactiveMsg,
+				},
+			},
+		}
+
+		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(
+			context.Background(),
+			recipient,
+			msg,
+			whatsmeow.SendRequestExtra{ID: msgid},
+		)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			return
+		}
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message list sent (Interactive)")
+		response := map[string]interface{}{
+			"Details":   "Sent",
+			"Timestamp": resp.Timestamp.Unix(),
+			"Id":        msgid,
+		}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+	}
+}
+
