@@ -1796,6 +1796,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 		ButtonId   string `json:"ButtonId"`
 		ButtonText string `json:"ButtonText"`
 		ButtonUrl  string `json:"ButtonUrl,omitempty"`
+		ButtonCopy string `json:"ButtonCopy,omitempty"`
 	}
 	type textStruct struct {
 		Phone   string         `json:"Phone"`
@@ -1866,7 +1867,24 @@ func (s *server) SendButtons() http.HandlerFunc {
 		var nativeFlowButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 		for _, item := range t.Buttons {
 			// Check if it's a URL button
-			if item.ButtonUrl != "" {
+			if item.ButtonCopy != "" {
+            	buttonParamsJSON, err := json.Marshal(map[string]string{
+            		"display_text": item.ButtonText,
+            		"copy_code":    item.ButtonCopy,
+            	})
+            	if err != nil {
+            		log.Error().Err(err).Msg("Failed to marshal copy button params")
+            		continue
+            	}
+
+            	nativeFlowButtons = append(nativeFlowButtons,
+            		&waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+            			Name:             proto.String("cta_copy"),
+            			ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+            		},
+            	)
+
+            } else if item.ButtonUrl != "" {
 				buttonParamsJSON, err := json.Marshal(map[string]string{
 					"display_text": item.ButtonText,
 					"url":          item.ButtonUrl,
