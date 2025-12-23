@@ -1868,22 +1868,37 @@ func (s *server) SendButtons() http.HandlerFunc {
 		for _, item := range t.Buttons {
 			// Check if it's a URL button
 			if item.ButtonCopy != "" {
-            	buttonParamsJSON, err := json.Marshal(map[string]string{
-            		"display_text": item.ButtonText,
-            		"copy_code":    item.ButtonCopy,
-            	})
-            	if err != nil {
-            		log.Error().Err(err).Msg("Failed to marshal copy button params")
-            		continue
-            	}
+				buttonParamsJSON, err := json.Marshal(map[string]string{
+					"display_text": item.ButtonText,
+					"copy_code":    item.ButtonCopy,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal copy button params")
+					continue
+				}
 
-            	nativeFlowButtons = append(nativeFlowButtons,
-            		&waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
-            			Name:             proto.String("cta_copy"),
-            			ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
-            		},
-            	)
+				nativeFlowButtons = append(nativeFlowButtons,
+					&waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+						Name:             proto.String("cta_copy"),
+						ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+					},
+				)
 
+			} else if item.ButtonUrl != "" && strings.HasPrefix(item.ButtonUrl, "tel:") {
+				// Call button - phone number in format tel:+628xxx
+				phoneNumber := strings.TrimPrefix(item.ButtonUrl, "tel:")
+				buttonParamsJSON, err := json.Marshal(map[string]string{
+					"display_text": item.ButtonText,
+					"phone_number": phoneNumber,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal call button params")
+					continue
+				}
+				nativeFlowButtons = append(nativeFlowButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+					Name:             proto.String("cta_call"),
+					ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+				})
             } else if item.ButtonUrl != "" {
 				buttonParamsJSON, err := json.Marshal(map[string]string{
 					"display_text": item.ButtonText,
