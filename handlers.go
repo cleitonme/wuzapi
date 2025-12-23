@@ -1837,23 +1837,11 @@ func (s *server) SendButtons() http.HandlerFunc {
 			return
 		}
 
-		if t.Title == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Title in Payload"))
-			return
-		}
-
 		// Body is optional in original code, but highly recommended for InteractiveMessage
 		body := t.Body
-		if body == "" {
-			body = " "
-		}
 
 		if len(t.Buttons) < 1 {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
-			return
-		}
-		if len(t.Buttons) > 3 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("buttons cant more than 3"))
 			return
 		}
 
