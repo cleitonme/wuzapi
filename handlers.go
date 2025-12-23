@@ -1792,12 +1792,18 @@ func (s *server) SendLocation() http.HandlerFunc {
 
 // Sends Buttons
 func (s *server) SendButtons() http.HandlerFunc {
+    type PixPaymentStruct struct {
+        MerchantName string `json:"MerchantName"`
+        Key          string `json:"Key"`
+        KeyType      string `json:"KeyType"` // PHONE || EMAIL || CPF || EVP
+    }
 	type buttonStruct struct {
 		ButtonId   string `json:"ButtonId"`
 		ButtonText string `json:"ButtonText"`
 		ButtonUrl  string `json:"ButtonUrl,omitempty"`
 		ButtonCopy string `json:"ButtonCopy,omitempty"`
-	}
+		PixPayment *PixPaymentStruct `json:"PixPayment,omitempty"`
+    }
 	type textStruct struct {
 		Phone   string         `json:"Phone"`
 		Title   string         `json:"Title"`
@@ -1867,7 +1873,32 @@ func (s *server) SendButtons() http.HandlerFunc {
 		var nativeFlowButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 		for _, item := range t.Buttons {
 			// Check if it's a URL button
-			if item.ButtonCopy != "" {
+			if item.PixPayment != nil {
+				buttonParamsJSON, err := json.Marshal(map[string]interface{}{
+					"payment_settings": []map[string]interface{}{
+						{
+							"type": "pix_static_code",
+							"pix_static_code": map[string]string{
+								"merchant_name": item.PixPayment.MerchantName,
+								"key":           item.PixPayment.Key,
+								"key_type":      item.PixPayment.KeyType,
+							},
+						},
+					},
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to marshal PIX button params")
+					continue
+				}
+
+				nativeFlowButtons = append(nativeFlowButtons,
+					&waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+						Name:             proto.String("payment_info"),
+						ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
+					},
+				)
+
+			} else if item.ButtonCopy != "" {
 				buttonParamsJSON, err := json.Marshal(map[string]string{
 					"display_text": item.ButtonText,
 					"copy_code":    item.ButtonCopy,
