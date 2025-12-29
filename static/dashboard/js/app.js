@@ -8,6 +8,20 @@ let isAdminLogin = false;
 let currentInstanceData = null;
 
 
+function getApiToken() {
+  const rawToken = localStorage.getItem('token');
+  if (!rawToken) {
+    showError("Auth token not found");
+    return null;
+  }
+  try {
+    return JSON.parse(rawToken).value;
+  } catch (e) {
+    showError("Error parsing auth token");
+    return null;
+  }
+}
+
 function doConnect() {
   const eventsInput = document.getElementById('connectEvents').value;
   const immediateInput = document.getElementById('connectImmediate').checked;
@@ -19,16 +33,8 @@ function doConnect() {
     Immediate: immediateInput
   };
 
-  const rawToken = localStorage.getItem('token');
-  let apiToken = "";
-  try {
-    if (rawToken) {
-      apiToken = JSON.parse(rawToken).value;
-    }
-  } catch (e) {
-    showError("Error parsing auth token");
-    return;
-  }
+  const apiToken = getApiToken();
+  if (!apiToken) return;
 
   fetch('/session/connect', {
     method: 'POST',
@@ -62,17 +68,10 @@ function doConnect() {
     showError('Error connecting session');
   });
 }
+
 function doDisconnect() {
-  const rawToken = localStorage.getItem('token');
-  let apiToken = "";
-  try {
-    if (rawToken) {
-      apiToken = JSON.parse(rawToken).value;
-    }
-  } catch (e) {
-    showError("Error parsing auth token");
-    return;
-  }
+  const apiToken = getApiToken();
+  if (!apiToken) return;
 
   fetch('/session/disconnect', {
     method: 'POST',
@@ -103,16 +102,8 @@ function doDisconnect() {
 }
 
 function doLogout() {
-  const rawToken = localStorage.getItem('token');
-  let apiToken = "";
-  try {
-    if (rawToken) {
-      apiToken = JSON.parse(rawToken).value;
-    }
-  } catch (e) {
-    showError("Error parsing auth token");
-    return;
-  }
+  const apiToken = getApiToken();
+  if (!apiToken) return;
 
   fetch('/session/logout', {
     method: 'POST',
