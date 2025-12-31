@@ -1493,12 +1493,18 @@ paths:
         500:
           description: Internal Server Error
 
+
   /chat/send/list:
     post:
       tags:
         - Chat
-      summary: Sends a List message
-      description: Sends a List message
+      summary: Send List Message (Menu)
+      description: Sends a interactive List Message (Menu) using the 'biz' node injection for better compatibility (including WhatsApp Web).
+      operationId: sendListMessage
+      consumes:
+        - application/json
+      produces:
+        - application/json
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1506,14 +1512,104 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/definitions/MessageList'
+              type: object
+              required:
+                - phone
+                - title
+                - buttonText
+                - sections
+              example:
+                phone: "5215555555555"
+                title: "Title of the List"
+                description: "This is the body text of the list message."
+                footerText: "Footer"
+                buttonText: "Action"
+                sections:
+                  - title: "Section-1"
+                    rows:
+                      - title: "Good"
+                        description: "Perfect"
+                        rowId: "id_good"
+                      - title: "Bad"
+                        description: "Very Bad"
+                        rowId: "id_bad"
+                  - title: "Section-2"
+                    rows:
+                      - title: "Terrible"
+                        description: "Crying"
+                        rowId: "id_terrible"
+              properties:
+                phone:
+                  type: string
+                  description: Destination phone number
+                title:
+                  type: string
+                  description: Main title of the list message
+                description:
+                  type: string
+                  description: Body text / description
+                buttonText:
+                  type: string
+                  description: Text on the button to open the list
+                footerText:
+                  type: string
+                  description: Small text at the bottom
+                header:
+                  type: object
+                  description: Optional media header (currently supports image)
+                  properties:
+                    type:
+                      type: string
+                      enum: [image]
+                    media_url:
+                      type: string
+                      description: URL or Base64 of the image
+                sections:
+                  type: array
+                  description: Array of list sections
+                  items:
+                    type: object
+                    properties:
+                      title:
+                        type: string
+                        description: Section Title
+                      rows:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            title:
+                              type: string
+                            description:
+                              type: string
+                            rowId:
+                              type: string
+                              description: Unique ID for the row (returned in webhook)
       responses:
         200:
-          description: Response
+          description: Message sent successfully
           content:
             application/json:
               schema:
-                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  code:
+                    type: integer
+                  data:
+                    type: object
+                    properties:
+                      Details:
+                        type: string
+                      Id:
+                        type: string
+                      Timestamp:
+                        type: integer
+        400:
+          description: Bad Request
+        500:
+          description: Internal Server Error
   
   
   /chat/send/poll:
