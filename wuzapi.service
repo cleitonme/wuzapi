@@ -10,7 +10,7 @@ StartLimitBurst=5
 Restart=on-failure
 RestartSec=5s
 WorkingDirectory=/usr/local/wuzapi
-ExecStart=/usr/local/wuzapi/wuzapi -wadebug DEBUG
+ExecStart=/usr/local/wuzapi/wuzapi
 
 [Install]
 WantedBy=multi-user.target
