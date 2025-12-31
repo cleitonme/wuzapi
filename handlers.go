@@ -6346,8 +6346,9 @@ func (s *server) SendInteractiveButtons() http.HandlerFunc {
 	}
 
 	type HeaderStruct struct {
-		Type     string `json:"type"`
-		MediaUrl string `json:"media_url"`
+		Type         string `json:"type"`
+		MediaUrl     string `json:"media_url"`
+		ThumbnailUrl string `json:"thumbnail_url"`
 	}
 
 	type InteractiveRequest struct {
@@ -6359,10 +6360,113 @@ func (s *server) SendInteractiveButtons() http.HandlerFunc {
 		Id      string         `json:"id"`
 	}
 
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		client := clientManager.GetWhatsmeowClient(txtid)
+	createThumbnail := func(imgData []byte) []byte {
+		if len(imgData) == 0 {
+			return nil
+		}
+		img, _, err := image.Decode(bytes.NewReader(imgData))
+		if err != nil {
+			return nil
+		}
 
+		smallImg := resize.Resize(100, 0, img, resize.Lanczos3)
+		buf := new(bytes.Buffer)
+		jpeg.Encode(buf, smallImg, &jpeg.Options{Quality: 75})
+		return buf.Bytes()
+	}
+
+	uploadMedia := func(ctx context.Context, client *whatsmeow.Client, h *HeaderStruct) *waE2E.InteractiveMessage_Header {
+		if h == nil || h.MediaUrl == "" || (h.Type != "image" && h.Type != "video") {
+			return nil
+		}
+
+		var filedata []byte
+		var mimeType string
+
+		if strings.HasPrefix(h.MediaUrl, "data:") {
+			dataURL, err := dataurl.DecodeString(h.MediaUrl)
+			if err == nil {
+				filedata = dataURL.Data
+				mimeType = dataURL.ContentType()
+			}
+		} else {
+
+			filedata, mimeType, _ = fetchURLBytes(ctx, h.MediaUrl, 20*1024*1024)
+		}
+
+		if len(filedata) == 0 {
+			return nil
+		}
+
+		if h.Type == "image" {
+			uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaImage)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to upload image")
+				return nil
+			}
+
+			thumb := createThumbnail(filedata)
+
+			return &waE2E.InteractiveMessage_Header{
+				HasMediaAttachment: proto.Bool(true),
+				Media: &waE2E.InteractiveMessage_Header_ImageMessage{
+					ImageMessage: &waE2E.ImageMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String(mimeType),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(filedata))),
+						JPEGThumbnail: thumb,
+					},
+				},
+			}
+		}
+
+		if h.Type == "video" {
+			uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaVideo)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to upload video")
+				return nil
+			}
+
+			var thumb []byte
+			if h.ThumbnailUrl != "" {
+				thumbData, _, _ := fetchURLBytes(ctx, h.ThumbnailUrl, 1*1024*1024)
+				thumb = createThumbnail(thumbData)
+			}
+
+			return &waE2E.InteractiveMessage_Header{
+				HasMediaAttachment: proto.Bool(true),
+				Media: &waE2E.InteractiveMessage_Header_VideoMessage{
+					VideoMessage: &waE2E.VideoMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String(mimeType),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(filedata))),
+						JPEGThumbnail: thumb,
+					},
+				},
+			}
+		}
+
+		return nil
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		userInfoContext := r.Context().Value("userinfo")
+		if userInfoContext == nil {
+			s.Respond(w, r, http.StatusUnauthorized, errors.New("unauthorized"))
+			return
+		}
+		txtid := userInfoContext.(Values).Get("Id")
+
+		client := clientManager.GetWhatsmeowClient(txtid)
 		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
@@ -6390,43 +6494,7 @@ func (s *server) SendInteractiveButtons() http.HandlerFunc {
 			msgId = client.GenerateMessageID()
 		}
 
-		var headerProto *waE2E.InteractiveMessage_Header
-		if req.Header != nil && req.Header.MediaUrl != "" {
-			var filedata []byte
-			var mimeType string
-
-			if strings.HasPrefix(req.Header.MediaUrl, "data:") {
-				dataURL, err := dataurl.DecodeString(req.Header.MediaUrl)
-				if err == nil {
-					filedata = dataURL.Data
-					mimeType = dataURL.ContentType()
-				}
-			} else if isHTTPURL(req.Header.MediaUrl) {
-				filedata, mimeType, _ = fetchURLBytes(r.Context(), req.Header.MediaUrl, openGraphImageMaxBytes)
-			}
-
-			if len(filedata) > 0 {
-				if req.Header.Type == "image" {
-					uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
-					if err == nil {
-						headerProto = &waE2E.InteractiveMessage_Header{
-							HasMediaAttachment: proto.Bool(true),
-							Media: &waE2E.InteractiveMessage_Header_ImageMessage{
-								ImageMessage: &waE2E.ImageMessage{
-									URL:           proto.String(uploaded.URL),
-									DirectPath:    proto.String(uploaded.DirectPath),
-									MediaKey:      uploaded.MediaKey,
-									Mimetype:      proto.String(mimeType),
-									FileEncSHA256: uploaded.FileEncSHA256,
-									FileSHA256:    uploaded.FileSHA256,
-									FileLength:    proto.Uint64(uint64(len(filedata))),
-								},
-							},
-						}
-					}
-				}
-			}
-		}
+		headerProto := uploadMedia(r.Context(), client, req.Header)
 
 		var nativeButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 		for _, btn := range req.Buttons {
@@ -6497,11 +6565,12 @@ func (s *server) SendInteractiveButtons() http.HandlerFunc {
 			return
 		}
 
-		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyStr := userInfoContext.(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgId, "interactive", req.Body, "", historyLimit)
 
-		log.Info().Str("id", msgId).Msg("Interactive buttons sent with BIZ node")
+		log.Info().Str("id", msgId).Msg("Interactive buttons sent with Video/Image support")
+
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgId}
 		responseJson, err := json.Marshal(response)
 		if err != nil {

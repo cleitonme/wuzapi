@@ -1371,7 +1371,29 @@ paths:
       tags:
         - Chat
       summary: Send Interactive Buttons (Native Flow)
-      description: Sends a message with interactive buttons using WhatsApp Native Flow. Use this endpoint for Quick Replies, Call buttons, Copy buttons, or URL buttons.
+      description: |
+        Sends a message with interactive buttons using WhatsApp Native Flow. Use this endpoint for Quick Replies, Call buttons, Copy buttons, or URL buttons.
+
+        ### 📹 Video Requirements (Crucial for iOS/Android)
+        If sending a video header, it MUST meet these standards to play correctly on mobile:
+        * **Format:** MP4
+        * **Video Codec:** H.264 (AVC) - *Do not use H.265/HEVC*
+        * **Pixel Format:** yuv420p
+        * **Metadata:** Must have 'faststart' enabled.
+        * **Thumbnail:** You MUST provide a `thumbnail_url` for videos to prevent playback errors on iOS.
+
+        ### 🛠️ FFmpeg Command to fix videos
+        ```bash
+        ffmpeg -i input.mp4 \
+          -c:v libx264 \
+          -profile:v main \
+          -level 3.1 \
+          -pix_fmt yuv420p \
+          -c:a aac \
+          -b:a 128k \
+          -movflags +faststart \
+          output_whatsapp.mp4
+        ```
       operationId: sendInteractiveButtons
       consumes:
         - application/json
@@ -1391,20 +1413,21 @@ paths:
                 - buttons
               example:
                 phone: "5215555555555"
-                body: "Hello! Please select an option below:"
+                body: "Check out this video!"
                 footer: "Powered by WuzAPI"
                 header:
-                  type: "image"
-                  media_url: "https://wisphub.io/static/img/wisp-bg-5.jpg"
+                  type: "video"
+                  media_url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_2MB.mp4"
+                  thumbnail_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/800px-Big_buck_bunny_poster_big.jpg"
                 buttons:
                   - name: "quick_reply"
                     buttonParamsJson:
-                      display_text: "Yes, I agree"
-                      id: "btn_yes"
+                      display_text: "Awesome!"
+                      id: "btn_awesome"
                   - name: "quick_reply"
                     buttonParamsJson:
-                      display_text: "No, thanks"
-                      id: "btn_no"
+                      display_text: "whats site"
+                      id: "btn_site"
               properties:
                 phone:
                   type: string
@@ -1423,17 +1446,21 @@ paths:
                   description: Optional message ID. If empty, one will be generated.
                 header:
                   type: object
-                  description: Optional media header (Image)
+                  description: Optional media header (Image or Video)
                   properties:
                     type:
                       type: string
-                      description: Media type (currently supports 'image')
-                      enum: [image]
-                      example: "image"
+                      description: Media type
+                      enum: [image, video]
+                      example: "video"
                     media_url:
                       type: string
-                      description: URL or Base64 data of the image
-                      example: "https://example.com/image.jpg"
+                      description: URL or Base64 data of the media
+                      example: "https://example.com/video.mp4"
+                    thumbnail_url:
+                      type: string
+                      description: "(Optional) Static image URL for video thumbnail. Required for iOS video playback."
+                      example: "https://example.com/thumbnail.jpg"
                 buttons:
                   type: array
                   description: Array of buttons (Max 3 recommended for UI stability)
@@ -1473,21 +1500,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  code:
-                    type: integer
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-                      Id:
-                        type: string
-                      Timestamp:
-                        type: integer
+                $ref: '#/components/schemas/MessageResponse'
         400:
           description: Bad Request (Missing fields or invalid phone)
         500:
