@@ -35,7 +35,17 @@ import (
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 	// ... otros imports ...
+
+	_ "image/jpeg" // <--- IMPORTANTE: Registra el decodificador JPEG
+	_ "image/png"  // <--- IMPORTANTE: Registra el decodificador PNG
+
+	_ "image/jpeg"
+
+	// El guion bajo es importante para registrar el formato
+	_ "image/png"
 )
+
+// Agrega este si usas imágenes PNG también
 
 // <--- IMPORTANTE
 
@@ -6318,7 +6328,7 @@ func (s *server) GetFormattedPhone() http.HandlerFunc {
 	}
 }
 
-// SendInteractiveButtons sends buttons injecting the 'biz' node via SendRequestExtra
+// SendInteractiveButtons sends interactive buttons by manually injecting the 'biz' node via SendRequestExtra.
 func (s *server) SendInteractiveButtons() http.HandlerFunc {
 
 	type ButtonParams struct {
@@ -6502,7 +6512,7 @@ func (s *server) SendInteractiveButtons() http.HandlerFunc {
 	}
 }
 
-// SendList Manual (Funciona gracias al patch en whatsmeow local)
+// SendList sends a manual Legacy List Message. This relies on the local whatsmeow patch to bypass automatic node injection.
 func (s *server) SendList() http.HandlerFunc {
 	type ListItem struct {
 		Title       string `json:"title"`
@@ -6608,6 +6618,255 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
+		response, _ := json.Marshal(map[string]interface{}{"Details": "Sent", "Id": msgId, "Timestamp": resp.Timestamp.Unix()})
+		s.Respond(w, r, http.StatusOK, string(response))
+	}
+}
+
+// SendCarousel sends an interactive Carousel Message (Multi-Card) with support for image and video headers.
+func (s *server) SendCarousel() http.HandlerFunc {
+
+	type ButtonParams struct {
+		DisplayText string `json:"display_text,omitempty"`
+		ID          string `json:"id,omitempty"`
+		Url         string `json:"url,omitempty"`
+		MerchantUrl string `json:"merchant_url,omitempty"`
+		CopyCode    string `json:"copy_code,omitempty"`
+	}
+
+	type CarouselButton struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Payload string `json:"payload"`
+	}
+
+	type HeaderStruct struct {
+		Type         string `json:"type"`
+		MediaUrl     string `json:"media_url"`
+		ThumbnailUrl string `json:"thumbnail_url"`
+	}
+
+	type Card struct {
+		Title       string           `json:"title"`
+		Description string           `json:"description"`
+		Footer      string           `json:"footer"`
+		Header      *HeaderStruct    `json:"header,omitempty"`
+		Buttons     []CarouselButton `json:"buttons"`
+	}
+
+	type CarouselRequest struct {
+		Phone       string        `json:"phone"`
+		Title       string        `json:"title"`
+		Description string        `json:"description"`
+		FooterText  string        `json:"footerText"`
+		Header      *HeaderStruct `json:"header,omitempty"`
+		Cards       []Card        `json:"cards"`
+		Id          string        `json:"id,omitempty"`
+	}
+
+	createThumbnail := func(imgData []byte) []byte {
+		if len(imgData) == 0 {
+			return nil
+		}
+		img, _, err := image.Decode(bytes.NewReader(imgData))
+		if err != nil {
+			return nil
+		}
+		smallImg := resize.Resize(100, 0, img, resize.Lanczos3)
+		buf := new(bytes.Buffer)
+		if err := jpeg.Encode(buf, smallImg, &jpeg.Options{Quality: 75}); err != nil {
+			return nil
+		}
+		return buf.Bytes()
+	}
+
+	uploadMedia := func(ctx context.Context, client *whatsmeow.Client, h *HeaderStruct) *waE2E.InteractiveMessage_Header {
+		if h == nil || h.MediaUrl == "" || (h.Type != "image" && h.Type != "video") {
+			return nil
+		}
+
+		var filedata []byte
+		var mimeType string
+		if strings.HasPrefix(h.MediaUrl, "data:") {
+			dataURL, err := dataurl.DecodeString(h.MediaUrl)
+			if err == nil {
+				filedata = dataURL.Data
+				mimeType = dataURL.ContentType()
+			}
+		} else {
+			filedata, mimeType, _ = fetchURLBytes(ctx, h.MediaUrl, 20*1024*1024)
+		}
+
+		if len(filedata) == 0 {
+			return nil
+		}
+
+		if h.Type == "image" {
+			uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaImage)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to upload image header")
+				return nil
+			}
+
+			thumbnail := createThumbnail(filedata)
+
+			return &waE2E.InteractiveMessage_Header{
+				HasMediaAttachment: proto.Bool(true),
+				Media: &waE2E.InteractiveMessage_Header_ImageMessage{
+					ImageMessage: &waE2E.ImageMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String(mimeType),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(filedata))),
+						JPEGThumbnail: thumbnail,
+					},
+				},
+			}
+		}
+
+		if h.Type == "video" {
+			uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaVideo)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to upload video header")
+				return nil
+			}
+
+			var thumbnail []byte
+			if h.ThumbnailUrl != "" {
+				thumbData, _, _ := fetchURLBytes(ctx, h.ThumbnailUrl, 1*1024*1024)
+				thumbnail = createThumbnail(thumbData)
+			}
+
+			return &waE2E.InteractiveMessage_Header{
+				HasMediaAttachment: proto.Bool(true),
+				Media: &waE2E.InteractiveMessage_Header_VideoMessage{
+					VideoMessage: &waE2E.VideoMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String(mimeType),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(filedata))),
+						JPEGThumbnail: thumbnail,
+					},
+				},
+			}
+		}
+
+		return nil
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		userInfoContext := r.Context().Value("userinfo")
+		if userInfoContext == nil {
+			s.Respond(w, r, http.StatusUnauthorized, errors.New("unauthorized"))
+			return
+		}
+		txtid := userInfoContext.(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req CarouselRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
+			return
+		}
+		if req.Phone == "" || len(req.Cards) == 0 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("phone and at least one card are required"))
+			return
+		}
+
+		recipient, _ := validateMessageFields(client, req.Phone, nil, nil)
+		msgId := req.Id
+		if msgId == "" {
+			msgId = client.GenerateMessageID()
+		}
+
+		mainHeaderProto := uploadMedia(r.Context(), client, req.Header)
+
+		var cardsProto []*waE2E.InteractiveMessage
+		for _, cardData := range req.Cards {
+			cardHeader := uploadMedia(r.Context(), client, cardData.Header)
+
+			var nativeButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
+			for _, btn := range cardData.Buttons {
+				var btnName string
+				var btnParams ButtonParams
+				switch btn.Type {
+				case "reply":
+					btnName = "quick_reply"
+					btnParams = ButtonParams{DisplayText: btn.Text, ID: btn.Payload}
+				case "copy":
+					btnName = "cta_copy"
+					btnParams = ButtonParams{DisplayText: btn.Text, CopyCode: btn.Payload}
+				case "url":
+					btnName = "cta_url"
+					btnParams = ButtonParams{DisplayText: btn.Text, Url: btn.Payload, MerchantUrl: btn.Payload}
+				case "call":
+					btnName = "cta_call"
+					btnParams = ButtonParams{DisplayText: btn.Text, ID: btn.Payload}
+				}
+				if btnName != "" {
+					paramsJson, _ := json.Marshal(btnParams)
+					nativeButtons = append(nativeButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+						Name:             proto.String(btnName),
+						ButtonParamsJSON: proto.String(string(paramsJson)),
+					})
+				}
+			}
+
+			cardsProto = append(cardsProto, &waE2E.InteractiveMessage{
+				Body:   &waE2E.InteractiveMessage_Body{Text: proto.String(cardData.Title + "\n" + cardData.Description)},
+				Footer: &waE2E.InteractiveMessage_Footer{Text: proto.String(cardData.Footer)},
+				Header: cardHeader,
+				InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+					NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+						Buttons:        nativeButtons,
+						MessageVersion: proto.Int32(1),
+					},
+				},
+			})
+		}
+
+		msg := &waE2E.Message{
+			InteractiveMessage: &waE2E.InteractiveMessage{
+				Body:   &waE2E.InteractiveMessage_Body{Text: proto.String(req.Title + "\n" + req.Description)},
+				Footer: &waE2E.InteractiveMessage_Footer{Text: proto.String(req.FooterText)},
+				Header: mainHeaderProto,
+				InteractiveMessage: &waE2E.InteractiveMessage_CarouselMessage_{
+					CarouselMessage: &waE2E.InteractiveMessage_CarouselMessage{
+						Cards:          cardsProto,
+						MessageVersion: proto.Int32(1),
+					},
+				},
+				ContextInfo: &waE2E.ContextInfo{MentionedJID: []string{}},
+			},
+		}
+
+		bizNode := waBinary.Node{
+			Tag: "biz", Attrs: waBinary.Attrs{},
+			Content: []waBinary.Node{{Tag: "interactive", Attrs: waBinary.Attrs{"v": "1", "type": "native_flow"},
+				Content: []waBinary.Node{{Tag: "native_flow", Attrs: waBinary.Attrs{"v": "2", "name": "mixed"}}}}},
+		}
+		extraNodes := []waBinary.Node{bizNode}
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{
+			ID:              msgId,
+			AdditionalNodes: &extraNodes,
+		})
+
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send carousel: %v", err))
+			return
+		}
+		log.Info().Str("id", msgId).Msg("Carousel Message Sent")
 		response, _ := json.Marshal(map[string]interface{}{"Details": "Sent", "Id": msgId, "Timestamp": resp.Timestamp.Unix()})
 		s.Respond(w, r, http.StatusOK, string(response))
 	}

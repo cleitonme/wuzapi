@@ -120,6 +120,7 @@ func (s *server) routes() {
 
 	s.router.Handle("/chat/send/buttons", c.Then(s.SendInteractiveButtons())).Methods("POST")
 	s.router.Handle("/chat/send/list", c.Then(s.SendList())).Methods("POST")
+	s.router.Handle("/chat/send/carousel", c.Then(s.SendCarousel())).Methods("POST")
 
 	s.router.Handle("/chat/send/poll", c.Then(s.SendPoll())).Methods("POST")
 	s.router.Handle("/chat/send/edit", c.Then(s.SendEditMessage())).Methods("POST")
