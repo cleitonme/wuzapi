@@ -32,7 +32,12 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
+
+	waBinary "go.mau.fi/whatsmeow/binary"
+	// ... otros imports ...
 )
+
+// <--- IMPORTANTE
 
 type Values struct {
 	m map[string]string
@@ -1777,110 +1782,6 @@ func (s *server) SendLocation() http.HandlerFunc {
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "location", t.Name, "", historyLimit)
-
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-		return
-	}
-}
-
-// Sends Buttons (not implemented, does not work)
-func (s *server) SendButtons() http.HandlerFunc {
-
-	type buttonStruct struct {
-		ButtonId   string
-		ButtonText string
-	}
-	type textStruct struct {
-		Phone   string
-		Title   string
-		Buttons []buttonStruct
-		Id      string
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
-			return
-		}
-
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		decoder := json.NewDecoder(r.Body)
-		var t textStruct
-		err := decoder.Decode(&t)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
-
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-
-		if t.Title == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Title in Payload"))
-			return
-		}
-
-		if len(t.Buttons) < 1 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
-			return
-		}
-		if len(t.Buttons) > 3 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("buttons cant more than 3"))
-			return
-		}
-
-		recipient, ok := parseJID(t.Phone)
-		if !ok {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
-			return
-		}
-
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
-		}
-
-		var buttons []*waE2E.ButtonsMessage_Button
-
-		for _, item := range t.Buttons {
-			buttons = append(buttons, &waE2E.ButtonsMessage_Button{
-				ButtonID:       proto.String(item.ButtonId),
-				ButtonText:     &waE2E.ButtonsMessage_Button_ButtonText{DisplayText: proto.String(item.ButtonText)},
-				Type:           waE2E.ButtonsMessage_Button_RESPONSE.Enum(),
-				NativeFlowInfo: &waE2E.ButtonsMessage_Button_NativeFlowInfo{},
-			})
-		}
-
-		msg2 := &waE2E.ButtonsMessage{
-			ContentText: proto.String(t.Title),
-			HeaderType:  waE2E.ButtonsMessage_EMPTY.Enum(),
-			Buttons:     buttons,
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, &waE2E.Message{ViewOnceMessage: &waE2E.FutureProofMessage{
-			Message: &waE2E.Message{
-				ButtonsMessage: msg2,
-			},
-		}}, whatsmeow.SendRequestExtra{ID: msgid})
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
-			return
-		}
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
@@ -6559,6 +6460,190 @@ func (s *server) GetFormattedPhone() http.HandlerFunc {
 			"exists": true,
 		}
 
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+	}
+}
+
+// SendInteractiveButtons sends buttons injecting the 'biz' node via SendRequestExtra
+func (s *server) SendInteractiveButtons() http.HandlerFunc {
+
+	type ButtonParams struct {
+		DisplayText string `json:"display_text,omitempty"`
+		ID          string `json:"id,omitempty"`
+		Url         string `json:"url,omitempty"`
+		MerchantUrl string `json:"merchant_url,omitempty"`
+		CopyCode    string `json:"copy_code,omitempty"`
+		PhoneNumber string `json:"phoneNumber,omitempty"`
+	}
+
+	type ButtonStruct struct {
+		Name         string       `json:"name"`
+		ButtonParams ButtonParams `json:"buttonParamsJson"`
+	}
+
+	type HeaderStruct struct {
+		Type     string `json:"type"`
+		MediaUrl string `json:"media_url"`
+	}
+
+	type InteractiveRequest struct {
+		Phone   string         `json:"phone"`
+		Body    string         `json:"body"`
+		Footer  string         `json:"footer"`
+		Header  *HeaderStruct  `json:"header,omitempty"`
+		Buttons []ButtonStruct `json:"buttons"`
+		Id      string         `json:"id"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req InteractiveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
+			return
+		}
+
+		if req.Phone == "" || req.Body == "" || len(req.Buttons) == 0 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing required fields"))
+			return
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		msgId := req.Id
+		if msgId == "" {
+			msgId = client.GenerateMessageID()
+		}
+
+		var headerProto *waE2E.InteractiveMessage_Header
+		if req.Header != nil && req.Header.MediaUrl != "" {
+			var filedata []byte
+			var mimeType string
+
+			if strings.HasPrefix(req.Header.MediaUrl, "data:") {
+				dataURL, err := dataurl.DecodeString(req.Header.MediaUrl)
+				if err == nil {
+					filedata = dataURL.Data
+					mimeType = dataURL.ContentType()
+				}
+			} else if isHTTPURL(req.Header.MediaUrl) {
+				filedata, mimeType, _ = fetchURLBytes(r.Context(), req.Header.MediaUrl, openGraphImageMaxBytes)
+			}
+
+			if len(filedata) > 0 {
+				if req.Header.Type == "image" {
+					uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+					if err == nil {
+						headerProto = &waE2E.InteractiveMessage_Header{
+							HasMediaAttachment: proto.Bool(true),
+							Media: &waE2E.InteractiveMessage_Header_ImageMessage{
+								ImageMessage: &waE2E.ImageMessage{
+									URL:           proto.String(uploaded.URL),
+									DirectPath:    proto.String(uploaded.DirectPath),
+									MediaKey:      uploaded.MediaKey,
+									Mimetype:      proto.String(mimeType),
+									FileEncSHA256: uploaded.FileEncSHA256,
+									FileSHA256:    uploaded.FileSHA256,
+									FileLength:    proto.Uint64(uint64(len(filedata))),
+								},
+							},
+						}
+					}
+				}
+			}
+		}
+
+		var nativeButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
+		for _, btn := range req.Buttons {
+			paramsJson, _ := json.Marshal(btn.ButtonParams)
+			nativeButtons = append(nativeButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+				Name:             proto.String(btn.Name),
+				ButtonParamsJSON: proto.String(string(paramsJson)),
+			})
+		}
+
+		nativeParams := fmt.Sprintf(`{"from":"wuzapi","templateId":"%s"}`, msgId)
+
+		interactiveMsg := &waE2E.InteractiveMessage{
+			Body: &waE2E.InteractiveMessage_Body{
+				Text: proto.String(req.Body),
+			},
+			Footer: &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(req.Footer),
+			},
+			Header: headerProto,
+			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+					Buttons:           nativeButtons,
+					MessageParamsJSON: proto.String(nativeParams),
+					MessageVersion:    proto.Int32(1),
+				},
+			},
+			ContextInfo: &waE2E.ContextInfo{
+				MentionedJID: []string{},
+			},
+		}
+
+		msg := &waE2E.Message{
+			InteractiveMessage: interactiveMsg,
+		}
+
+		bizNode := waBinary.Node{
+			Tag: "biz",
+			Content: []waBinary.Node{
+				{
+					Tag: "interactive",
+					Attrs: waBinary.Attrs{
+						"v":    "1",
+						"type": "native_flow",
+					},
+					Content: []waBinary.Node{
+						{
+							Tag: "native_flow",
+							Attrs: waBinary.Attrs{
+								"v":    "2",
+								"name": "mixed",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		extraNodes := []waBinary.Node{bizNode}
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{
+			ID:              msgId,
+			AdditionalNodes: &extraNodes,
+		})
+
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send message: %v", err))
+			return
+		}
+
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgId, "interactive", req.Body, "", historyLimit)
+
+		log.Info().Str("id", msgId).Msg("Interactive buttons sent with BIZ node")
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgId}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)

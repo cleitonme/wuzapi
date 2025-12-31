@@ -1364,12 +1364,19 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+
   /chat/send/buttons:
     post:
       tags:
         - Chat
-      summary: Sends a Buttons message
-      description: Sends a Buttons message
+      summary: Send Interactive Buttons (Native Flow)
+      description: Sends a message with interactive buttons using WhatsApp Native Flow. Use this endpoint for Quick Replies, Call buttons, Copy buttons, or URL buttons.
+      operationId: sendInteractiveButtons
+      consumes:
+        - application/json
+      produces:
+        - application/json
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1377,14 +1384,115 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/definitions/MessageButtons'
+              type: object
+              required:
+                - phone
+                - body
+                - buttons
+              example:
+                phone: "5215555555555"
+                body: "Hello! Please select an option below:"
+                footer: "Powered by WuzAPI"
+                header:
+                  type: "image"
+                  media_url: "https://wisphub.io/static/img/wisp-bg-5.jpg"
+                buttons:
+                  - name: "quick_reply"
+                    buttonParamsJson:
+                      display_text: "Yes, I agree"
+                      id: "btn_yes"
+                  - name: "quick_reply"
+                    buttonParamsJson:
+                      display_text: "No, thanks"
+                      id: "btn_no"
+              properties:
+                phone:
+                  type: string
+                  description: Destination phone number (JID or number)
+                  example: "5215555555555"
+                body:
+                  type: string
+                  description: Main message text
+                  example: "Hello! Please select an option below."
+                footer:
+                  type: string
+                  description: Footer text (small text at bottom)
+                  example: "Powered by WuzAPI"
+                id:
+                  type: string
+                  description: Optional message ID. If empty, one will be generated.
+                header:
+                  type: object
+                  description: Optional media header (Image)
+                  properties:
+                    type:
+                      type: string
+                      description: Media type (currently supports 'image')
+                      enum: [image]
+                      example: "image"
+                    media_url:
+                      type: string
+                      description: URL or Base64 data of the image
+                      example: "https://example.com/image.jpg"
+                buttons:
+                  type: array
+                  description: Array of buttons (Max 3 recommended for UI stability)
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: "Button type: 'quick_reply', 'cta_url', 'cta_copy', or 'cta_call'"
+                        enum: [quick_reply, cta_url, cta_copy, cta_call]
+                        example: "quick_reply"
+                      buttonParamsJson:
+                        type: object
+                        description: Parameters specific to the button type
+                        properties:
+                          display_text:
+                            type: string
+                            description: Text shown on the button
+                          id:
+                            type: string
+                            description: ID for quick_reply (returned in webhook)
+                          url:
+                            type: string
+                            description: URL for cta_url
+                          merchant_url:
+                            type: string
+                            description: Fallback URL for cta_url
+                          copy_code:
+                            type: string
+                            description: Text to copy for cta_copy
+                          phoneNumber:
+                            type: string
+                            description: Phone number for cta_call
       responses:
         200:
-          description: Response
+          description: Message sent successfully
           content:
             application/json:
               schema:
-                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  code:
+                    type: integer
+                  data:
+                    type: object
+                    properties:
+                      Details:
+                        type: string
+                      Id:
+                        type: string
+                      Timestamp:
+                        type: integer
+        400:
+          description: Bad Request (Missing fields or invalid phone)
+        500:
+          description: Internal Server Error
+
   /chat/send/list:
     post:
       tags:
@@ -1406,6 +1514,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/send/poll:
     post:
       tags:
