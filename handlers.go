@@ -37,6 +37,7 @@ import (
 	_ "image/png"
 
 	waBinary "go.mau.fi/whatsmeow/binary"
+	waSyncAction "go.mau.fi/whatsmeow/proto/waSyncAction"
 )
 
 type Values struct {
@@ -6736,5 +6737,154 @@ func (s *server) SendCarousel() http.HandlerFunc {
 		log.Info().Str("id", msgId).Msg("Carousel Message Sent")
 		response, _ := json.Marshal(map[string]interface{}{"Details": "Sent", "Id": msgId, "Timestamp": resp.Timestamp.Unix()})
 		s.Respond(w, r, http.StatusOK, string(response))
+	}
+}
+
+// HandleLabelEdit manages the lifecycle of label definitions (Create, Update, Delete).
+func (s *server) HandleLabelEdit() http.HandlerFunc {
+	type labelEditReq struct {
+		LabelID string `json:"label_id"`
+		Name    string `json:"name"`
+		Color   int32  `json:"color"`
+		Deleted bool   `json:"deleted"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session found"))
+			return
+		}
+
+		var req labelEditReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("invalid request body: %v", err))
+			return
+		}
+
+		if req.LabelID == "" && !req.Deleted {
+			req.LabelID = client.GenerateMessageID()
+		}
+
+		action := &waSyncAction.LabelEditAction{
+			Name:    &req.Name,
+			Color:   &req.Color,
+			Deleted: &req.Deleted,
+		}
+
+		mutation := appstate.MutationInfo{
+			Index: []string{"label_edit", req.LabelID},
+			Value: &waSyncAction.SyncActionValue{
+				Timestamp:       proto.Int64(time.Now().UnixMilli()),
+				LabelEditAction: action,
+			},
+		}
+
+		patch := appstate.PatchInfo{
+			Type:      appstate.WAPatchRegular,
+			Mutations: []appstate.MutationInfo{mutation},
+		}
+
+		err := client.SendAppState(context.Background(), patch)
+
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to sync label edit: %v", err))
+			return
+		}
+
+		statusAction := "saved"
+		if req.Deleted {
+			statusAction = "deleted"
+		}
+
+		response := map[string]interface{}{
+			"status":   "success",
+			"label_id": req.LabelID,
+			"action":   statusAction,
+		}
+		jsonResp, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(jsonResp))
+	}
+}
+
+// HandleLabelAssign manages the assignment or removal of labels to chats or messages.
+func (s *server) HandleLabelAssign() http.HandlerFunc {
+	type labelAssignReq struct {
+		JID       string `json:"jid"`
+		LabelID   string `json:"label_id"`
+		MessageID string `json:"message_id"`
+		Remove    bool   `json:"remove"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session found"))
+			return
+		}
+
+		var req labelAssignReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("invalid request body: %v", err))
+			return
+		}
+
+		if req.LabelID == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing label_id in payload"))
+			return
+		}
+
+		recipient, err := validateMessageFields(client, req.JID, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("invalid jid: %v", err))
+			return
+		}
+
+		isLabeled := !req.Remove
+		action := &waSyncAction.LabelAssociationAction{
+			Labeled: &isLabeled,
+		}
+
+		var mutationIndex []string
+		if req.MessageID != "" {
+			mutationIndex = []string{"label_message", req.LabelID, recipient.String(), req.MessageID}
+		} else {
+			mutationIndex = []string{"label_jid", req.LabelID, recipient.String()}
+		}
+
+		mutation := appstate.MutationInfo{
+			Index: mutationIndex,
+			Value: &waSyncAction.SyncActionValue{
+				Timestamp:              proto.Int64(time.Now().UnixMilli()),
+				LabelAssociationAction: action,
+			},
+		}
+
+		patch := appstate.PatchInfo{
+			Type:      appstate.WAPatchRegular,
+			Mutations: []appstate.MutationInfo{mutation},
+		}
+
+		err = client.SendAppState(context.Background(), patch)
+
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to sync label association: %v", err))
+			return
+		}
+
+		mode := "assigned"
+		if req.Remove {
+			mode = "removed"
+		}
+
+		response := map[string]string{
+			"status": "success",
+			"target": recipient.String(),
+			"mode":   mode,
+		}
+		jsonResp, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(jsonResp))
 	}
 }

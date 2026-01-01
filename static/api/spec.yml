@@ -2089,6 +2089,143 @@ paths:
             application/json:
               schema:
                 example: { "code": 500, "error": "error rejecting call: connection failed", "success": false }
+  
+  
+  /chat/label/edit:
+    post:
+      tags:
+        - Labels
+      summary: "Manage Labels (Create, Edit, Delete)"
+      description: "Handles the lifecycle of label definitions. Use this to create a new label, rename/recolor an existing one, or delete a label."
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label_id:
+                  type: string
+                  description: "ID of the label. Leave empty to create a new one."
+                name:
+                  type: string
+                  description: "Name of the label."
+                color:
+                  type: integer
+                  description: "Color ID (0-19) used by WhatsApp."
+                deleted:
+                  type: boolean
+                  description: "Set to true to delete this label."
+            examples:
+              Create Label:
+                summary: "1. Create New Label"
+                value:
+                  name: "New Client"
+                  color: 1
+                  deleted: false
+              Edit Label:
+                summary: "2. Edit Label Name/Color"
+                value:
+                  label_id: "123456789"
+                  name: "VIP Client"
+                  color: 2
+                  deleted: false
+              Delete Label:
+                summary: "3. Delete Label"
+                value:
+                  label_id: "123456789"
+                  deleted: true
+      responses:
+        "200":
+          description: "Operation successful"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  label_id:
+                    type: string
+                  action:
+                    type: string
+        "400":
+          description: "Bad Request"
+        "500":
+          description: "Internal Server Error"
+
+  /chat/label/assign:
+    post:
+      tags:
+        - Labels
+      summary: "Manage Association (Assign/Remove)"
+      description: "Assigns or removes a label from a Chat (user) or a specific Message."
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - jid
+                - label_id
+              properties:
+                jid:
+                  type: string
+                  description: "The remote JID (Phone number) e.g., 5215512345678@s.whatsapp.net"
+                label_id:
+                  type: string
+                  description: "The Label ID to apply."
+                message_id:
+                  type: string
+                  description: "Optional. If provided, applies the label to this specific message ID only."
+                remove:
+                  type: boolean
+                  description: "Set to true to REMOVE the label. Default is false (Assign)."
+            examples:
+              Assign to Chat:
+                summary: "1. Assign Label to Chat"
+                value:
+                  jid: "5215512345678@s.whatsapp.net"
+                  label_id: "123456789"
+                  remove: false
+              Remove from Chat:
+                summary: "2. Remove Label from Chat"
+                value:
+                  jid: "5215512345678@s.whatsapp.net"
+                  label_id: "123456789"
+                  remove: true
+              Assign to Message:
+                summary: "3. Assign Label to Specific Message"
+                value:
+                  jid: "5215512345678@s.whatsapp.net"
+                  label_id: "123456789"
+                  message_id: "3EB0..."
+                  remove: false
+      responses:
+        "200":
+          description: "Operation successful"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  target:
+                    type: string
+                  mode:
+                    type: string
+        "400":
+          description: "Bad Request"
+        "500":
+          description: "Internal Server Error"
+  
+  
   /group/create:
     post:
       tags:
