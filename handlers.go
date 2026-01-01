@@ -33,21 +33,11 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	// ... otros imports ...
-
-	_ "image/jpeg" // <--- IMPORTANTE: Registra el decodificador JPEG
-	_ "image/png"  // <--- IMPORTANTE: Registra el decodificador PNG
-
 	_ "image/jpeg"
-
-	// El guion bajo es importante para registrar el formato
 	_ "image/png"
+
+	waBinary "go.mau.fi/whatsmeow/binary"
 )
-
-// Agrega este si usas imágenes PNG también
-
-// <--- IMPORTANTE
 
 type Values struct {
 	m map[string]string
@@ -940,7 +930,8 @@ func (s *server) SendDocument() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
+
 			return
 		}
 
@@ -1093,7 +1084,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
 			return
 		}
 
@@ -1415,7 +1406,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
 			return
 		}
 
@@ -1527,7 +1518,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 
 		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaVideo)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
 			return
 		}
 
@@ -1571,7 +1562,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
 			return
 		}
 
@@ -2325,169 +2316,8 @@ func (s *server) RequestHistorySync() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
-
-/*
-// Sends a Template message
-func (s *server) SendTemplate() http.HandlerFunc {
-
-	type buttonStruct struct {
-		DisplayText string
-		Id          string
-		Url         string
-		PhoneNumber string
-		Type        string
-	}
-
-	type templateStruct struct {
-		Phone   string
-		Content string
-		Footer  string
-		Id      string
-		Buttons []buttonStruct
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		userid, _ := strconv.Atoi(txtid)
-
-		if clientManager.GetWhatsmeowClient(userid) == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
-			return
-		}
-
-		msgid := ""
-		var resp whatsmeow.SendResponse
-//var ts time.Time
-
-		decoder := json.NewDecoder(r.Body)
-		var t templateStruct
-		err := decoder.Decode(&t)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
-
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-
-		if t.Content == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Content in Payload"))
-			return
-		}
-
-		if t.Footer == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Footer in Payload"))
-			return
-		}
-
-		if len(t.Buttons) < 1 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
-			return
-		}
-
-		recipient, ok := parseJID(t.Phone)
-		if !ok {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
-			return
-		}
-
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
-		}
-
-		var buttons []*waE2E.HydratedTemplateButton
-
-		id := 1
-		for _, item := range t.Buttons {
-			switch item.Type {
-			case "quickreply":
-				var idtext string
-				text := item.DisplayText
-				if item.Id == "" {
-					idtext = strconv.Itoa(id)
-				} else {
-					idtext = item.Id
-				}
-				buttons = append(buttons, &waE2E.HydratedTemplateButton{
-					HydratedButton: &waE2E.HydratedTemplateButton_QuickReplyButton{
-						QuickReplyButton: &waE2E.HydratedQuickReplyButton{
-							DisplayText: &text,
-							Id:          proto.String(idtext),
-						},
-					},
-				})
-			case "url":
-				text := item.DisplayText
-				url := item.Url
-				buttons = append(buttons, &waE2E.HydratedTemplateButton{
-					HydratedButton: &waE2E.HydratedTemplateButton_UrlButton{
-						UrlButton: &waE2E.HydratedURLButton{
-							DisplayText: &text,
-							Url:         &url,
-						},
-					},
-				})
-			case "call":
-				text := item.DisplayText
-				phonenumber := item.PhoneNumber
-				buttons = append(buttons, &waE2E.HydratedTemplateButton{
-					HydratedButton: &waE2E.HydratedTemplateButton_CallButton{
-						CallButton: &waE2E.HydratedCallButton{
-							DisplayText: &text,
-							PhoneNumber: &phonenumber,
-						},
-					},
-				})
-			default:
-				text := item.DisplayText
-				buttons = append(buttons, &waE2E.HydratedTemplateButton{
-					HydratedButton: &waE2E.HydratedTemplateButton_QuickReplyButton{
-						QuickReplyButton: &waE2E.HydratedQuickReplyButton{
-							DisplayText: &text,
-							Id:          proto.String(string(id)),
-						},
-					},
-				})
-			}
-			id++
-		}
-
-		msg := &waE2E.Message{TemplateMessage: &waE2E.TemplateMessage{
-			HydratedTemplate: &waE2E.HydratedFourRowTemplate{
-				HydratedContentText: proto.String(t.Content),
-				HydratedFooterText:  proto.String(t.Footer),
-				HydratedButtons:     buttons,
-				TemplateId:          proto.String("1"),
-			},
-		},
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(userid).SendMessage(context.Background(),recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
-			return
-		}
-
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp.Unix())).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-		return
-	}
-}
-*/
 
 // checks if users/phones are on Whatsapp
 func (s *server) CheckUser() http.HandlerFunc {
@@ -2531,7 +2361,8 @@ func (s *server) CheckUser() http.HandlerFunc {
 
 		resp, err := clientManager.GetWhatsmeowClient(txtid).IsOnWhatsApp(context.Background(), t.Phone)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to check if users are on WhatsApp: %s", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to check if users are on WhatsApp: %s", err))
+
 			return
 		}
 
@@ -2551,7 +2382,6 @@ func (s *server) CheckUser() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -2618,7 +2448,6 @@ func (s *server) GetUser() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -2673,7 +2502,6 @@ func (s *server) SendPresence() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 
 	}
 }
@@ -2742,7 +2570,7 @@ func (s *server) GetAvatar() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
+
 	}
 }
 
@@ -2772,7 +2600,6 @@ func (s *server) GetContacts() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -2832,7 +2659,6 @@ func (s *server) ChatPresence() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -2867,7 +2693,7 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
 			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not create user directory (%s)", userDirectory))
 				return
 			}
 		}
@@ -2911,7 +2737,6 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -2946,7 +2771,7 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
 			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not create user directory (%s)", userDirectory))
 				return
 			}
 		}
@@ -2990,7 +2815,6 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -3025,7 +2849,7 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
 			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not create user directory (%s)", userDirectory))
 				return
 			}
 		}
@@ -3069,7 +2893,6 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -3104,7 +2927,7 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
 			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not create user directory (%s)", userDirectory))
 				return
 			}
 		}
@@ -3148,7 +2971,6 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -3243,7 +3065,7 @@ func (s *server) React() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
 			return
 		}
 
@@ -3255,8 +3077,6 @@ func (s *server) React() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-
-		return
 	}
 }
 
@@ -3335,7 +3155,6 @@ func (s *server) MarkRead() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -3375,8 +3194,6 @@ func (s *server) ListGroups() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-
-		return
 	}
 }
 
@@ -3426,7 +3243,6 @@ func (s *server) GetGroupInfo() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3490,7 +3306,6 @@ func (s *server) GetGroupInviteLink() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3541,7 +3356,6 @@ func (s *server) GroupJoin() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3613,7 +3427,6 @@ func (s *server) CreateGroup() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3666,7 +3479,6 @@ func (s *server) SetGroupLocked() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3739,7 +3551,6 @@ func (s *server) SetDisappearingTimer() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3791,7 +3602,6 @@ func (s *server) RemoveGroupPhoto() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3884,7 +3694,6 @@ func (s *server) UpdateGroupParticipants() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -3934,7 +3743,6 @@ func (s *server) GetGroupInviteInfo() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -4020,7 +3828,6 @@ func (s *server) SetGroupPhoto() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -4078,7 +3885,6 @@ func (s *server) SetGroupName() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -4136,7 +3942,6 @@ func (s *server) SetGroupTopic() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -4188,7 +3993,6 @@ func (s *server) GroupLeave() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -4241,7 +4045,6 @@ func (s *server) SetGroupAnnounce() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -4283,7 +4086,6 @@ func (s *server) ListNewsletter() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -5306,7 +5108,7 @@ func (s *server) ConfigureS3() http.HandlerFunc {
 
 			err = GetS3Manager().InitializeS3Client(txtid, s3Config)
 			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to initialize S3 client: %v", err)))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to initialize S3 client: %v", err))
 				return
 			}
 		} else {
@@ -5456,7 +5258,7 @@ func (s *server) TestS3Connection() http.HandlerFunc {
 
 		err = GetS3Manager().InitializeS3Client(txtid, s3Config)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to initialize S3 client: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to initialize S3 client: %v", err))
 			return
 		}
 
@@ -5466,7 +5268,7 @@ func (s *server) TestS3Connection() http.HandlerFunc {
 
 		err = GetS3Manager().TestConnection(ctx, txtid)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("S3 connection test failed: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("S3 connection test failed: %v", err))
 			return
 		}
 
@@ -5960,7 +5762,7 @@ func (s *server) RejectCall() http.HandlerFunc {
 
 		err = clientManager.GetWhatsmeowClient(txtid).RejectCall(context.Background(), callFrom, t.CallID)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error rejecting call: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error rejecting call: %v", err))
 			return
 		}
 
@@ -5972,7 +5774,7 @@ func (s *server) RejectCall() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
+
 	}
 }
 
@@ -6009,7 +5811,7 @@ func (s *server) GetUserLID() http.HandlerFunc {
 		lid, err := client.Store.LIDs.GetLIDForPN(context.Background(), jid)
 		if err != nil {
 			log.Error().Err(err).Str("jid", jidParam).Msg("Failed to get LID for phone number")
-			s.Respond(w, r, http.StatusNotFound, errors.New(fmt.Sprintf("LID not found for this number: %v", err)))
+			s.Respond(w, r, http.StatusNotFound, fmt.Errorf("LID not found for this number: %v", err))
 			return
 		}
 
@@ -6098,7 +5900,7 @@ func (s *server) RequestUnavailableMessage() http.HandlerFunc {
 
 		resp, err := client.SendMessage(ctx, chatJID, unavailableMessage, whatsmeow.SendRequestExtra{Peer: true})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to send unavailable message request: %s", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send unavailable message request: %s", err))
 			return
 		}
 
@@ -6162,7 +5964,7 @@ func (s *server) ArchiveChat() http.HandlerFunc {
 
 		err = client.SendAppState(ctx, appstate.BuildArchive(chatJID, t.Archive, time.Time{}, nil))
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to archive chat: %s", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to archive chat: %s", err))
 			return
 		}
 		statusText := "Chat archived"
@@ -6214,7 +6016,7 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
 			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not create user directory (%s)", userDirectory))
 				return
 			}
 		}
@@ -6258,7 +6060,7 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
+
 	}
 }
 
