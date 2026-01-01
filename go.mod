@@ -73,4 +73,4 @@ require (
 	rsc.io/qr v0.2.0 // indirect
 )
 
-replace go.mau.fi/whatsmeow => ../whatsmeow
+replace go.mau.fi/whatsmeow => github.com/cleitonme/private-meow v0.0.0-20251220180806-4dcc234b7ae7
