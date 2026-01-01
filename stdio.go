@@ -471,7 +471,7 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 func (ss *stdioServer) executeHTTPHandler(req *jsonRpcRequest, httpMethod, httpPath string) {
 	// Create a mock HTTP request
 	var body io.Reader
-	if req.Params != nil && len(req.Params) > 0 {
+	if len(req.Params) > 0 {
 		jsonParams, err := json.Marshal(req.Params)
 		if err != nil {
 			ss.sendError(req.ID, 400, fmt.Sprintf("invalid params: %v", err))

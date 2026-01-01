@@ -371,20 +371,20 @@ func (s *server) GetWebhook() http.HandlerFunc {
 
 		rows, err := s.db.Query("SELECT webhook,events FROM users WHERE id=$1 LIMIT 1", txtid)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not get webhook: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not get webhook: %v", err))
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			err = rows.Scan(&webhook, &events)
 			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not get webhook: %s", fmt.Sprintf("%s", err))))
+				s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not get webhook: %v", err))
 				return
 			}
 		}
 		err = rows.Err()
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not get webhook: %s", fmt.Sprintf("%s", err))))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not get webhook: %v", err))
 			return
 		}
 
@@ -397,7 +397,6 @@ func (s *server) GetWebhook() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -410,7 +409,7 @@ func (s *server) DeleteWebhook() http.HandlerFunc {
 		// Update the database to remove the webhook and clear events
 		_, err := s.db.Exec("UPDATE users SET webhook='', events='' WHERE id=$1", txtid)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not delete webhook: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not delete webhook: %v", err))
 			return
 		}
 
@@ -483,7 +482,7 @@ func (s *server) UpdateWebhook() http.HandlerFunc {
 		}
 
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not update webhook: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not update webhook: %v", err))
 			return
 		}
 
@@ -551,7 +550,8 @@ func (s *server) SetWebhook() http.HandlerFunc {
 		}
 
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not set webhook: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not set webhook: %v", err))
+
 			return
 		}
 
@@ -616,7 +616,6 @@ func (s *server) GetQR() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -666,7 +665,6 @@ func (s *server) Logout() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -720,7 +718,6 @@ func (s *server) PairPhone() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -817,7 +814,6 @@ func (s *server) GetStatus() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -894,7 +890,8 @@ func (s *server) SendDocument() http.HandlerFunc {
 				filedata = dataURL.Data
 				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaDocument)
 				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
+					s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
+
 					return
 				}
 			}
@@ -959,7 +956,6 @@ func (s *server) SendDocument() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1032,7 +1028,8 @@ func (s *server) SendAudio() http.HandlerFunc {
 				filedata = dataURL.Data
 				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaAudio)
 				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
+					s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
+
 					return
 				}
 			}
@@ -1112,7 +1109,6 @@ func (s *server) SendAudio() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1185,7 +1181,7 @@ func (s *server) SendImage() http.HandlerFunc {
 		} else if isHTTPURL(t.Image) {
 			data, ct, err := fetchURLBytes(r.Context(), t.Image, openGraphImageMaxBytes)
 			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("failed to fetch image from url: %v", err)))
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to fetch image from url: %v", err))
 				return
 			}
 			mimeType := ct
@@ -1206,7 +1202,7 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaImage)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
 			return
 		}
 
@@ -1214,7 +1210,7 @@ func (s *server) SendImage() http.HandlerFunc {
 		reader := bytes.NewReader(filedata)
 		img, _, err := image.Decode(reader)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not decode image for thumbnail preparation: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not decode image for thumbnail preparation: %v", err))
 			return
 		}
 
@@ -1223,20 +1219,20 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		tmpFile, err := os.CreateTemp("", "resized-*.jpg")
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Could not create temp file for thumbnail: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Could not create temp file for thumbnail: %v", err))
 			return
 		}
 		defer tmpFile.Close()
 
 		// write new image to file
 		if err := jpeg.Encode(tmpFile, m, nil); err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to encode jpeg: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Failed to encode jpeg: %v", err))
 			return
 		}
 
 		thumbnailBytes, err = os.ReadFile(tmpFile.Name())
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to read %s: %v", tmpFile.Name(), err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Failed to read %s: %v", tmpFile.Name(), err))
 			return
 		}
 
@@ -1283,7 +1279,7 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
 			return
 		}
 
@@ -1299,7 +1295,6 @@ func (s *server) SendImage() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1381,7 +1376,8 @@ func (s *server) SendSticker() http.HandlerFunc {
 
 		uploaded, err := clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), processedData, whatsmeow.MediaImage)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to upload file: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Failed to upload file: %v", err))
+
 			return
 		}
 
@@ -1435,7 +1431,6 @@ func (s *server) SendSticker() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1509,7 +1504,8 @@ func (s *server) SendVideo() http.HandlerFunc {
 		} else if isHTTPURL(t.Video) {
 			data, ct, err := fetchURLBytes(r.Context(), t.Video, openGraphImageMaxBytes)
 			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("failed to fetch image from url: %v", err)))
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to fetch image from url: %v", err))
+
 				return
 			}
 			mimeType := ct
@@ -1591,7 +1587,6 @@ func (s *server) SendVideo() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1679,7 +1674,8 @@ func (s *server) SendContact() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
+
 			return
 		}
 
@@ -1695,7 +1691,6 @@ func (s *server) SendContact() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1785,7 +1780,8 @@ func (s *server) SendLocation() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
+
 			return
 		}
 
@@ -1801,7 +1797,6 @@ func (s *server) SendLocation() http.HandlerFunc {
 		} else {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
-		return
 	}
 }
 
@@ -1841,7 +1836,8 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 
 		err = clientManager.GetWhatsmeowClient(txtid).SetStatusMessage(context.Background(), *msg)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending status message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending status message: %v", err))
+
 			return
 		}
 
@@ -1854,7 +1850,6 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -1968,7 +1963,8 @@ func (s *server) SendMessage() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
+
 			return
 		}
 
@@ -1985,7 +1981,6 @@ func (s *server) SendMessage() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -2046,7 +2041,8 @@ func (s *server) SendPoll() http.HandlerFunc {
 		pollMessage := clientManager.GetWhatsmeowClient(txtid).BuildPollCreation(req.Header, req.Options, 1)
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, pollMessage, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to send poll: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send poll: %v", err))
+
 			return
 		}
 
@@ -2110,7 +2106,8 @@ func (s *server) DeleteMessage() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, clientManager.GetWhatsmeowClient(txtid).BuildRevoke(recipient, types.EmptyJID, msgid))
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
+
 			return
 		}
 
@@ -2123,7 +2120,6 @@ func (s *server) DeleteMessage() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
@@ -2203,7 +2199,8 @@ func (s *server) SendEditMessage() http.HandlerFunc {
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, clientManager.GetWhatsmeowClient(txtid).BuildEdit(recipient, msgid, msg))
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending edit message: %v", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending edit message: %v", err))
+
 			return
 		}
 
@@ -2216,7 +2213,6 @@ func (s *server) SendEditMessage() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-		return
 	}
 }
 
