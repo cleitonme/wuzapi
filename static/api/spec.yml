@@ -881,6 +881,39 @@ paths:
           description: Invalid or missing token
         404:
           description: User not found
+  /misc/phone:
+    post:
+      tags:
+        - Misc
+      summary: Validate and format phone number
+      description: Sends a phone number to WhatsApp API to verify existence and get the correct international format (JID). ideal for correcting Mexico numbers (+521).
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                  example: "523312345678"
+      responses:
+        200:
+          description: Phone Validated
+          content:
+            application/json:
+              schema:
+                example: { 
+                  "input": "523312345678", 
+                  "jid": "5213312345678@s.whatsapp.net", 
+                  "number": "5213312345678",
+                  "exists": true 
+                }
+        400:
+          description: Invalid Number or Not on WhatsApp
+
   /chat/delete:
     post:
       tags:
@@ -1331,12 +1364,41 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+
   /chat/send/buttons:
     post:
       tags:
         - Chat
-      summary: Sends a Buttons message
-      description: Sends a Buttons message
+      summary: Send Interactive Buttons (Native Flow)
+      description: |
+        Sends a message with interactive buttons using WhatsApp Native Flow. Use this endpoint for Quick Replies, Call buttons, Copy buttons, or URL buttons.
+
+        ### 📹 Video Requirements (Crucial for iOS/Android)
+        If sending a video header, it MUST meet these standards to play correctly on mobile:
+        * **Format:** MP4
+        * **Video Codec:** H.264 (AVC) - *Do not use H.265/HEVC*
+        * **Pixel Format:** yuv420p
+        * **Metadata:** Must have 'faststart' enabled.
+        * **Thumbnail:** You MUST provide a `thumbnail_url` for videos to prevent playback errors on iOS.
+
+        ### 🛠️ FFmpeg Command to fix videos
+        ```bash
+        ffmpeg -i input.mp4 \
+          -c:v libx264 \
+          -profile:v main \
+          -level 3.1 \
+          -pix_fmt yuv420p \
+          -c:a aac \
+          -b:a 128k \
+          -movflags +faststart \
+          output_whatsapp.mp4
+        ```
+      operationId: sendInteractiveButtons
+      consumes:
+        - application/json
+      produces:
+        - application/json
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1344,20 +1406,118 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/definitions/MessageButtons'
+              type: object
+              required:
+                - phone
+                - body
+                - buttons
+              example:
+                phone: "5215555555555"
+                body: "Check out this video!"
+                footer: "Powered by WuzAPI"
+                header:
+                  type: "video"
+                  media_url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_2MB.mp4"
+                  thumbnail_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/800px-Big_buck_bunny_poster_big.jpg"
+                buttons:
+                  - name: "quick_reply"
+                    buttonParamsJson:
+                      display_text: "Awesome!"
+                      id: "btn_awesome"
+                  - name: "quick_reply"
+                    buttonParamsJson:
+                      display_text: "whats site"
+                      id: "btn_site"
+              properties:
+                phone:
+                  type: string
+                  description: Destination phone number (JID or number)
+                  example: "5215555555555"
+                body:
+                  type: string
+                  description: Main message text
+                  example: "Hello! Please select an option below."
+                footer:
+                  type: string
+                  description: Footer text (small text at bottom)
+                  example: "Powered by WuzAPI"
+                id:
+                  type: string
+                  description: Optional message ID. If empty, one will be generated.
+                header:
+                  type: object
+                  description: Optional media header (Image or Video)
+                  properties:
+                    type:
+                      type: string
+                      description: Media type
+                      enum: [image, video]
+                      example: "video"
+                    media_url:
+                      type: string
+                      description: URL or Base64 data of the media
+                      example: "https://example.com/video.mp4"
+                    thumbnail_url:
+                      type: string
+                      description: "(Optional) Static image URL for video thumbnail. Required for iOS video playback."
+                      example: "https://example.com/thumbnail.jpg"
+                buttons:
+                  type: array
+                  description: Array of buttons (Max 3 recommended for UI stability)
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: "Button type: 'quick_reply', 'cta_url', 'cta_copy', or 'cta_call'"
+                        enum: [quick_reply, cta_url, cta_copy, cta_call]
+                        example: "quick_reply"
+                      buttonParamsJson:
+                        type: object
+                        description: Parameters specific to the button type
+                        properties:
+                          display_text:
+                            type: string
+                            description: Text shown on the button
+                          id:
+                            type: string
+                            description: ID for quick_reply (returned in webhook)
+                          url:
+                            type: string
+                            description: URL for cta_url
+                          merchant_url:
+                            type: string
+                            description: Fallback URL for cta_url
+                          copy_code:
+                            type: string
+                            description: Text to copy for cta_copy
+                          phoneNumber:
+                            type: string
+                            description: Phone number for cta_call
       responses:
         200:
-          description: Response
+          description: Message sent successfully
           content:
             application/json:
               schema:
-                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+                $ref: '#/components/schemas/MessageResponse'
+        400:
+          description: Bad Request (Missing fields or invalid phone)
+        500:
+          description: Internal Server Error
+
+
   /chat/send/list:
     post:
       tags:
         - Chat
-      summary: Sends a List message
-      description: Sends a List message
+      summary: Send List Message (Menu)
+      description: Sends a interactive List Message (Menu) using the 'biz' node injection for better compatibility (including WhatsApp Web).
+      operationId: sendListMessage
+      consumes:
+        - application/json
+      produces:
+        - application/json
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1365,14 +1525,277 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/definitions/MessageList'
+              type: object
+              required:
+                - phone
+                - title
+                - buttonText
+                - sections
+              example:
+                phone: "5215555555555"
+                title: "Title of the List"
+                description: "This is the body text of the list message."
+                footerText: "Footer"
+                buttonText: "Action"
+                sections:
+                  - title: "Section-1"
+                    rows:
+                      - title: "Good"
+                        description: "Perfect"
+                        rowId: "id_good"
+                      - title: "Bad"
+                        description: "Very Bad"
+                        rowId: "id_bad"
+                  - title: "Section-2"
+                    rows:
+                      - title: "Terrible"
+                        description: "Crying"
+                        rowId: "id_terrible"
+              properties:
+                phone:
+                  type: string
+                  description: Destination phone number
+                title:
+                  type: string
+                  description: Main title of the list message
+                description:
+                  type: string
+                  description: Body text / description
+                buttonText:
+                  type: string
+                  description: Text on the button to open the list
+                footerText:
+                  type: string
+                  description: Small text at the bottom
+                header:
+                  type: object
+                  description: Optional media header (currently supports image)
+                  properties:
+                    type:
+                      type: string
+                      enum: [image]
+                    media_url:
+                      type: string
+                      description: URL or Base64 of the image
+                sections:
+                  type: array
+                  description: Array of list sections
+                  items:
+                    type: object
+                    properties:
+                      title:
+                        type: string
+                        description: Section Title
+                      rows:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            title:
+                              type: string
+                            description:
+                              type: string
+                            rowId:
+                              type: string
+                              description: Unique ID for the row (returned in webhook)
       responses:
         200:
-          description: Response
+          description: Message sent successfully
           content:
             application/json:
               schema:
-                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  code:
+                    type: integer
+                  data:
+                    type: object
+                    properties:
+                      Details:
+                        type: string
+                      Id:
+                        type: string
+                      Timestamp:
+                        type: integer
+        400:
+          description: Bad Request
+        500:
+          description: Internal Server Error
+  
+  
+  /chat/send/carousel:
+    post:
+      tags:
+        - Chat
+      summary: Send a Carousel Message (Interactive Multi-Card)
+      description: |
+        Sends a Carousel Message containing multiple cards (slides). Each card can have an image or video header and buttons.
+
+        ### 📹 Video Requirements (Crucial for iOS/Android)
+        To ensure videos play correctly on mobile devices (especially iPhone), they MUST meet these standards:
+        * **Format:** MP4
+        * **Video Codec:** H.264 (AVC) - *Do not use H.265/HEVC*
+        * **Pixel Format:** yuv420p
+        * **Metadata:** Must have 'faststart' enabled (moov atom at the beginning).
+        * **Thumbnail:** You MUST provide a `thumbnail_url` for videos to prevent playback errors on iOS.
+
+        ### 🛠️ FFmpeg Command to fix videos
+        Use this command to convert any video to a WhatsApp-compatible format:
+        ```bash
+        ffmpeg -i input.mp4 \
+          -c:v libx264 \
+          -profile:v main \
+          -level 3.1 \
+          -pix_fmt yuv420p \
+          -c:a aac \
+          -b:a 128k \
+          -movflags +faststart \
+          output_whatsapp.mp4
+        ```
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+                - cards
+              properties:
+                phone:
+                  type: string
+                  description: Phone number with country code
+                  example: "5217771234567"
+                title:
+                  type: string
+                  description: Main title of the carousel message
+                  example: "Multimedia Gallery"
+                description:
+                  type: string
+                  description: Main body text
+                  example: "Swipe to see videos and photos"
+                footerText:
+                  type: string
+                  description: Main footer text
+                  example: "WuzAPI Media"
+                header:
+                  type: object
+                  description: Main header media (Optional)
+                  properties:
+                    type:
+                      type: string
+                      enum: [image, video]
+                      example: "image"
+                    media_url:
+                      type: string
+                      description: URL or Base64 of the media
+                      example: "https://wisphub.io/static/img/wisp-bg-5.jpg"
+                    thumbnail_url:
+                      type: string
+                      description: "(Optional) Static image URL for video thumbnail. Fixes iOS playback issues."
+                      example: "https://wisphub.io/static/img/wisp-bg-5.jpg"
+                cards:
+                  type: array
+                  description: List of cards (slides)
+                  items:
+                    type: object
+                    required:
+                      - title
+                      - buttons
+                    properties:
+                      title:
+                        type: string
+                        example: "Card 1"
+                      description:
+                        type: string
+                        example: "Description for card 1"
+                      footer:
+                        type: string
+                        example: "Footer 1"
+                      header:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                            enum: [image, video]
+                            example: "video"
+                          media_url:
+                            type: string
+                            example: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_2MB.mp4"
+                          thumbnail_url:
+                            type: string
+                            description: "Required for videos on iOS to prevent loading errors."
+                            example: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/800px-Big_buck_bunny_poster_big.jpg"
+                      buttons:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                            - type
+                            - text
+                            - payload
+                          properties:
+                            type:
+                              type: string
+                              enum: [reply, url, copy, call]
+                              description: "Button type: reply (Quick Reply), url (Link), copy (Clipboard), call (Phone call)"
+                              example: "reply"
+                            text:
+                              type: string
+                              example: "Watch Video"
+                            payload:
+                              type: string
+                              description: "ID for reply/call, URL for url, Code for copy"
+                              example: "btn_video_1"
+              example:
+                phone: "5217771234567"
+                title: "Multimedia Showcase"
+                description: "Swipe to view our content"
+                footerText: "Powered by WuzAPI"
+                header:
+                  type: "image"
+                  media_url: "https://wisphub.io/static/img/wisp-bg-5.jpg"
+                cards:
+                  - title: "Static Image"
+                    description: "High quality photography"
+                    footer: "Photo Card"
+                    header:
+                      type: "image"
+                      media_url: "https://wisphub.io/static/img/wisp-bg-5.jpg"
+                    buttons:
+                      - type: "reply"
+                        text: "Like Photo"
+                        payload: "like_photo_1"
+                  - title: "Big Buck Bunny"
+                    description: "H.264 Video Test (Mobile Compatible)"
+                    footer: "Video Card"
+                    header:
+                      type: "video"
+                      media_url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_2MB.mp4"
+                      thumbnail_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/800px-Big_buck_bunny_poster_big.jpg"
+                    buttons:
+                      - type: "reply"
+                        text: "Play Video"
+                        payload: "play_bunny"
+      responses:
+        200:
+          description: Carousel sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        400:
+          description: Invalid request parameters
+        401:
+          description: Unauthorized
+        500:
+          description: Internal server error
+
+
   /chat/send/poll:
     post:
       tags:
@@ -1526,6 +1949,8 @@ paths:
             application/json:
               schema:
                 example: { "code": 200, "data": { "Details": "Chat presence set successfuly" }, "success": true } 
+  
+  
   /chat/history:
     get:
       tags:
@@ -1666,6 +2091,143 @@ paths:
             application/json:
               schema:
                 example: { "code": 500, "error": "error rejecting call: connection failed", "success": false }
+  
+  
+  /chat/label/edit:
+    post:
+      tags:
+        - Labels
+      summary: "Manage Labels (Create, Edit, Delete)"
+      description: "Handles the lifecycle of label definitions. Use this to create a new label, rename/recolor an existing one, or delete a label."
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label_id:
+                  type: string
+                  description: "ID of the label. Leave empty to create a new one."
+                name:
+                  type: string
+                  description: "Name of the label."
+                color:
+                  type: integer
+                  description: "Color ID (0-19) used by WhatsApp."
+                deleted:
+                  type: boolean
+                  description: "Set to true to delete this label."
+            examples:
+              Create Label:
+                summary: "1. Create New Label"
+                value:
+                  name: "New Client"
+                  color: 1
+                  deleted: false
+              Edit Label:
+                summary: "2. Edit Label Name/Color"
+                value:
+                  label_id: "123456789"
+                  name: "VIP Client"
+                  color: 2
+                  deleted: false
+              Delete Label:
+                summary: "3. Delete Label"
+                value:
+                  label_id: "123456789"
+                  deleted: true
+      responses:
+        "200":
+          description: "Operation successful"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  label_id:
+                    type: string
+                  action:
+                    type: string
+        "400":
+          description: "Bad Request"
+        "500":
+          description: "Internal Server Error"
+
+  /chat/label/assign:
+    post:
+      tags:
+        - Labels
+      summary: "Manage Association (Assign/Remove)"
+      description: "Assigns or removes a label from a Chat (user) or a specific Message."
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - jid
+                - label_id
+              properties:
+                jid:
+                  type: string
+                  description: "The remote JID (Phone number) e.g., 5215512345678@s.whatsapp.net"
+                label_id:
+                  type: string
+                  description: "The Label ID to apply."
+                message_id:
+                  type: string
+                  description: "Optional. If provided, applies the label to this specific message ID only."
+                remove:
+                  type: boolean
+                  description: "Set to true to REMOVE the label. Default is false (Assign)."
+            examples:
+              Assign to Chat:
+                summary: "1. Assign Label to Chat"
+                value:
+                  jid: "5215512345678@s.whatsapp.net"
+                  label_id: "123456789"
+                  remove: false
+              Remove from Chat:
+                summary: "2. Remove Label from Chat"
+                value:
+                  jid: "5215512345678@s.whatsapp.net"
+                  label_id: "123456789"
+                  remove: true
+              Assign to Message:
+                summary: "3. Assign Label to Specific Message"
+                value:
+                  jid: "5215512345678@s.whatsapp.net"
+                  label_id: "123456789"
+                  message_id: "3EB0..."
+                  remove: false
+      responses:
+        "200":
+          description: "Operation successful"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  target:
+                    type: string
+                  mode:
+                    type: string
+        "400":
+          description: "Bad Request"
+        "500":
+          description: "Internal Server Error"
+  
+  
   /group/create:
     post:
       tags:
@@ -1987,6 +2549,151 @@ paths:
                 example: { "code": 200, "data": { "Details": "Participants updated successfully" }, "success": true }
 
 definitions:
+
+
+  MessageImage:
+    type: object
+    required: 
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/image.jpg"
+        description: "Public URL of the image"
+      Image:
+        type: string
+        example: "data:image/jpeg;base64,..."
+        description: "Base64 data (Legacy)"
+      Caption:
+        type: string
+        example: "Look at this picture"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageVideo:
+    type: object
+    required: 
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/video.mp4"
+        description: "Public URL of the video"
+      Video:
+        type: string
+        description: "Base64 data (Legacy)"
+      Caption:
+        type: string
+        example: "My video"
+      is_ptv:
+        type: boolean
+        description: "Send as Video Note (Circular video). Max 60s."
+        example: false
+      is_gif:
+        type: boolean
+        description: "Send as animated GIF (muted loop)"
+        example: false
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageAudio:
+    type: object
+    required:
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/audio.ogg"
+        description: "Public URL of the audio"
+      Audio:
+        type: string
+        description: "Base64 data (Legacy)"
+      ptt:
+        type: boolean
+        description: "True for Voice Note (Green mic), False for Audio File (Orange icon)"
+        example: true
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageDocument:
+    type: object
+    required: 
+      - Phone
+      - FileName 
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/file.pdf"
+        description: "Public URL of the document"
+      Document:
+        type: string
+        example: "data:application/pdf;base64,..."
+        description: "Base64 data (Legacy)"
+      FileName:
+        type: string
+        example: "invoice.pdf"
+      Caption:
+        type: string
+        example: "Here is your invoice"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageSticker:
+    type: object
+    required: 
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png"
+        description: "Public URL of the image (PNG/JPG/WEBP) to convert to sticker."
+      Sticker:
+        type: string
+        description: "Base64 data (Legacy)"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      PackName:
+        type: string
+        example: "My Bot Pack"
+      PackPublisher:
+        type: string
+        example: "Wuzapi"
+      Emojis:
+        type: array
+        items:
+          type: string
+        example: ["🤖", "🔥"]
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
   ContextInfo:
     type: object
     description: "Optional context info for replies"
@@ -2245,6 +2952,8 @@ definitions:
         type: string
       FileLength:
         type: number
+  
+  
   ChatPresence:
     type: object
     required: 
@@ -2256,10 +2965,20 @@ definitions:
         example: "5491155553935"
       State:
         type: string
+        description: "State of presence: 'composing' (typing) or 'paused'"
         example: composing
+        enum: [composing, paused]
       Media: 
         type: string
+        description: "If recording audio, set this to 'audio'. Otherwise leave empty."
         example: audio
+        enum: [audio]
+      Duration:
+        type: integer
+        description: "Optional: Number of seconds to maintain the state before automatically sending 'paused'. Simulates human behavior."
+        example: 3
+        
+  
   StatusText:
     type: object
     required:
@@ -2455,141 +3174,7 @@ definitions:
         type: string
         description: "Text content of the message being replied to (for displaying quote preview)"
         example: "Original message text"
-  MessageImage:
-    type: object
-    required: 
-      - Phone
-      - Image
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Image:
-        type: string
-        example: data:image/jpeg;base64,iVBORw0
-      Caption:
-        type: string
-        example: Image Description
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-  MessageAudio:
-    type: object
-    required:
-      - Phone
-      - Audio
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Audio:
-        type: string
-        example: "data:audio/ogg;base64,iVBORw0a"
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      PTT:
-        type: boolean
-        example: true
-      MimeType:
-        type: string
-        example: "audio/ogg; codecs=opus"
-      Seconds:
-        type: integer
-        format: uint32
-        example: 15
-      Waveform:
-        type: array
-        items:
-          type: integer
-          format: byte
-        example: [0, 0, 0, 12, 20, 20, 22, 10, 5, 0, 0, 0]
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-  MessageVideo:
-    type: object
-    required: 
-      - Phone
-      - Video 
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Video:
-        type: string
-        example: "data:video/mp4;base64,iVBORw0"
-      Caption:
-        type: string
-        example: "my video"
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      JpegThumbnail:
-        type: string
-        example: "AA00D010"
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-  MessageSticker:
-    type: object
-    required: 
-      - Phone
-      - Sticker
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Sticker:
-        type: string
-        example: "data:image/webp;base64,iVBORw0"
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      PngThumbnail:
-        type: string
-        example: "AA00D010"
-      MimeType:
-        type: string
-        example: "image/webp"
-      PackId:
-        type: string
-        example: "my.sticker.pack.id"
-      PackName:
-        type: string
-        example: "My Pack"
-      PackPublisher:
-        type: string
-        example: "Wuzapi"
-      Emojis:
-        type: array
-        items:
-          type: string
-        example: ["😀", "🎉"]
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-        description: "Optional context info for replies, mentions, and forwarding"
-  MessageDocument:
-    type: object
-    required: 
-      - Phone
-      - Document 
-      - FileName 
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Document:
-        type: string
-        example: data:application/octet-stream;base64,aG9sYSBxdWUKdGFsCmNvbW8KZXN0YXMK
-      FileName:
-        type: string
-        example: file.txt
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
+
   MessageTemplate:
     type: object
     required: 
@@ -2953,6 +3538,29 @@ components:
       type: apiKey
       in: header
       name: Authorization
+
+  schemas:
+    MessageResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            Details:
+              type: string
+              example: "Sent"
+            Id:
+              type: string
+              example: "3EB09CA40283FC67869A33"
+            Timestamp:
+              type: integer
+              example: 1767160695
 
 security:
   - ApiKeyAuth: []

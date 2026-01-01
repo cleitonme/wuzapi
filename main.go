@@ -52,6 +52,7 @@ var (
 	skipMedia           = flag.Bool("skipmedia", false, "Do not attempt to download media in messages")
 	osName              = flag.String("osname", "Mac OS 10", "Connection OSName in Whatsapp")
 	colorOutput         = flag.Bool("color", false, "Enable colored output for console logs")
+	waDebugHttp         = flag.Bool("wadebughttp", false, "Enable whatsmeow HTTP debug (true or false)")
 	sslcert             = flag.String("sslcertificate", "", "SSL Certificate File")
 	sslprivkey          = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
 	adminToken          = flag.String("admintoken", "", "Security Token to authorize admin actions (list/create/remove users)")
@@ -134,9 +135,6 @@ func newSafeHTTPClient() *http.Client {
 				if ssrfDetected {
 					return nil, ssrfLastError
 				}
-				if lastDialErr != nil {
-					return nil, lastDialErr
-				}
 				return nil, fmt.Errorf("no dialable IP addresses found for host %s", host)
 			},
 		},
@@ -179,6 +177,31 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if *waDebug == "" {
+		if v := os.Getenv("WA_DEBUG"); v != "" {
+			*waDebug = v
+			log.Info().Str("level", v).Msg("Debug level configured from environment variable")
+		}
+	}
+
+	if !*colorOutput {
+		if v := os.Getenv("WA_COLOR_LOGS"); v != "" {
+			if strings.ToLower(v) == "true" || v == "1" {
+				*colorOutput = true
+				log.Info().Msg("Colored logs enabled from environment variable")
+			}
+		}
+	}
+
+	if !*waDebugHttp {
+		if v := os.Getenv("WA_DEBUG_HTTP"); v != "" {
+			if strings.ToLower(v) == "true" || v == "1" {
+				*waDebugHttp = true
+				log.Info().Msg("Whatsmeow HTTP debug enabled from environment variable")
+			}
+		}
+	}
 
 	// Check for address in environment variable if flag is default or empty
 	if *address == "0.0.0.0" || *address == "" {

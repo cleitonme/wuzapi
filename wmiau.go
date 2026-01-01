@@ -418,7 +418,7 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 
 	httpClient := resty.New()
 	httpClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
-	if *waDebug == "DEBUG" {
+	if *waDebugHttp == true {
 		httpClient.SetDebug(true)
 	}
 	httpClient.SetTimeout(30 * time.Second)
@@ -668,6 +668,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				log.Info().Msg("Marked self as available")
 			}
 		}
+
 	case *events.Connected, *events.PushNameSetting:
 		postmap["type"] = "Connected"
 		dowebhook = 1
@@ -1844,7 +1845,113 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postmap["type"] = "FBMessage"
 		dowebhook = 1
 		log.Info().Str("info", evt.Info.SourceString()).Msg("Facebook message received")
+
+	// 1. Label Created, Edited, or Deleted
+	case *events.LabelEdit:
+		dowebhook = 1
+
+		// Safely unpack pointers
+		labelName := ""
+		if evt.Action.Name != nil {
+			labelName = *evt.Action.Name
+		}
+
+		isDeleted := false
+		if evt.Action.Deleted != nil {
+			isDeleted = *evt.Action.Deleted
+		}
+
+		labelColor := int32(0)
+		if evt.Action.Color != nil {
+			labelColor = *evt.Action.Color
+		}
+
+		postmap["labelID"] = evt.LabelID
+		postmap["timestamp"] = time.Now().Unix()
+
+		if isDeleted {
+			postmap["type"] = "LabelDelete"
+			postmap["action"] = "delete"
+			postmap["deleted"] = true
+
+			log.Info().Str("id", evt.LabelID).Msg("🗑️ Label Deleted")
+		} else {
+			// WhatsApp sends the same event for New and Edit
+			postmap["type"] = "LabelEdit"
+			postmap["action"] = "update"
+			postmap["name"] = labelName
+			postmap["color"] = labelColor
+			postmap["deleted"] = false
+
+			log.Info().
+				Str("name", labelName).
+				Str("id", evt.LabelID).
+				Msg("🏷️ Label Saved (New/Edit)")
+		}
+
+	// 2. Label Assigned/Removed from a Chat (User)
+	case *events.LabelAssociationChat:
+		postmap["type"] = "LabelAssociation"
+		dowebhook = 1
+
+		isAssigned := false
+		if evt.Action != nil && evt.Action.Labeled != nil {
+			isAssigned = *evt.Action.Labeled
+		}
+
+		postmap["labelID"] = evt.LabelID
+		postmap["userJID"] = evt.JID.String()
+		postmap["assigned"] = isAssigned
+		postmap["timestamp"] = time.Now().Unix()
+
+		if isAssigned {
+			postmap["action"] = "add"
+			log.Info().
+				Str("user", evt.JID.String()).
+				Str("label", evt.LabelID).
+				Msg("✅ Label Assigned to Chat")
+		} else {
+			postmap["action"] = "remove"
+			log.Info().
+				Str("user", evt.JID.String()).
+				Str("label", evt.LabelID).
+				Msg("❌ Label Removed from Chat")
+		}
+
+	// 3. Label Assigned/Removed from a Specific Message
+	case *events.LabelAssociationMessage:
+		postmap["type"] = "LabelAssociationMessage"
+		dowebhook = 1
+
+		isAssigned := false
+		if evt.Action != nil && evt.Action.Labeled != nil {
+			isAssigned = *evt.Action.Labeled
+		}
+
+		postmap["labelID"] = evt.LabelID
+		postmap["userJID"] = evt.JID.String()
+		postmap["messageID"] = evt.MessageID
+		postmap["assigned"] = isAssigned
+		postmap["timestamp"] = time.Now().Unix()
+
+		if isAssigned {
+			postmap["action"] = "add"
+			log.Info().
+				Str("msgID", evt.MessageID).
+				Str("label", evt.LabelID).
+				Msg("✅ Label Assigned to Message")
+		} else {
+			postmap["action"] = "remove"
+			log.Info().
+				Str("msgID", evt.MessageID).
+				Str("label", evt.LabelID).
+				Msg("❌ Label Removed from Message")
+		}
+
 	default:
+		fmt.Printf(">>> EVENTO MISTERIOSO: %T\n", evt)
+		log.Warn().Interface("event", evt).Msg("Unhandled event")
+
 		log.Warn().Str("event", fmt.Sprintf("%+v", evt)).Msg("Unhandled event")
 	}
 

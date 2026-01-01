@@ -18,9 +18,8 @@ services:
       - TZ=${TZ:-America/Sao_Paulo}
       - WEBHOOK_FORMAT=${WEBHOOK_FORMAT:-json}
       - SESSION_DEVICE_NAME=${SESSION_DEVICE_NAME:-WuzAPI}
-      # RabbitMQ configuration Optional
-      - RABBITMQ_URL=amqp://wuzapi:wuzapi@rabbitmq:5672/
-      - RABBITMQ_QUEUE=whatsapp_events
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - RABBITMQ_QUEUE=${RABBITMQ_QUEUE:-whatsapp_events}
     depends_on:
       db:
         condition: service_healthy
@@ -36,8 +35,8 @@ services:
       POSTGRES_USER: ${DB_USER:-wuzapi}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-wuzapi}
       POSTGRES_DB: ${DB_NAME:-wuzapi}
-    # ports:
-    #   - "${DB_PORT:-5432}:5432" # Uncomment to access the database directly from your host machine.
+    ports:
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
@@ -70,6 +69,63 @@ services:
       retries: 5
     restart: always
 
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    container_name: minio_s3
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"  # Port API S3
+      - "9001:9001"  # Web Console
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - wuzapi-network
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    networks:
+      - wuzapi-network
+
+  webhook-tester:
+    image: ghcr.io/tarampampam/webhook-tester:latest
+    container_name: webhook-tester
+    command: serve
+    ports:
+      - "8082:8080"
+    networks:
+      - wuzapi-network
+    restart: unless-stopped
+
+  proxy-http:
+    image: kalaksi/tinyproxy:latest
+    restart: unless-stopped
+    environment:
+      - ALLOW=0.0.0.0/0
+    networks:
+      - wuzapi-network
+    ports:
+      - "8888:8888"
+
+  # --- SOCKS5 Proxy (With Auth) ---
+  proxy-socks:
+    image: serjs/go-socks5-proxy
+    restart: unless-stopped
+    environment:
+      - PROXY_USER=wuzapi
+      - PROXY_PASSWORD=wuzapi
+      - PROXY_PORT=1080
+    networks:
+      - wuzapi-network
+    ports:
+      - "1080:1080"
+
 networks:
   wuzapi-network:
     driver: bridge
@@ -77,3 +133,4 @@ networks:
 volumes:
   db_data:
   rabbitmq_data:
+  minio_data:

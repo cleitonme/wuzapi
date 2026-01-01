@@ -175,6 +175,35 @@
       </div>
     </div>
 
+    <div class="ui horizontal divider widget"> Session </div>
+    <div class="ui three column stackable grid cards">
+    
+    <div class="blue card widget" style="cursor: pointer;" id="sessionConnect">
+      <div class="content">
+        <a class="ui blue right ribbon label">Session</a>
+        <div class="header">Connect</div>
+        <div class="description">Start WhatsApp session (Scan QR).</div>
+      </div>
+    </div>
+
+    <div class="orange card widget" style="cursor: pointer;" id="sessionDisconnect">
+      <div class="content">
+        <a class="ui orange right ribbon label">Session</a>
+        <div class="header">Disconnect</div>
+        <div class="description">Disconnect from WS (Pause).</div>
+      </div>
+    </div>
+
+    <div class="red card widget" style="cursor: pointer;" id="sessionLogout">
+      <div class="content">
+        <a class="ui red right ribbon label">Session</a>
+        <div class="header">Logout</div>
+        <div class="description">Close session and remove credentials.</div>
+      </div>
+    </div>
+
+    </div>
+
     <div class="ui horizontal divider widget"> Chat </div>
 
     <div class="ui three column stackable grid cards">
@@ -824,6 +853,59 @@
       <div class="ui positive right labeled icon button">Get Avatar<i class="checkmark icon"></i></div>
     </div>
   </div>
+
+
+  <!-- Settings Modals -->
+<div class="ui modal" id="modalSessionConnect">
+  <i class="close icon"></i>
+  <div class="header"> Connect Session </div>
+  <div class="content">
+    <div class="ui form">
+      <div class="field">
+        <label>Subscribe Events (comma separated)</label>
+        <input id="connectEvents" type="text" value="Message,ChatPresence" placeholder="Message,ChatPresence">
+      </div>
+      <div class="field">
+        <div class="ui checkbox">
+          <input type="checkbox" id="connectImmediate" checked>
+          <label>Immediate Connect</label>
+        </div>
+      </div>
+      <div class="ui message info hidden" id="connectResult"></div>
+    </div>
+  </div>
+  <div class="actions">
+    <div class="ui cancel button secondary">Cancel</div>
+    <div class="ui positive right labeled icon button approve">Connect<i class="checkmark icon"></i></div>
+  </div>
+</div>
+
+<div class="ui modal" id="modalSessionDisconnect">
+  <i class="close icon"></i>
+  <div class="header"> Disconnect Session </div>
+  <div class="content">
+    <p>Are you sure you want to disconnect? This will stop receiving events temporarily.</p>
+    <div class="ui message info hidden" id="disconnectResult"></div>
+  </div>
+  <div class="actions">
+    <div class="ui cancel button secondary">No</div>
+    <div class="ui orange right labeled icon button approve">Yes, Disconnect<i class="power off icon"></i></div>
+  </div>
+</div>
+
+<div class="ui modal" id="modalSessionLogout">
+  <i class="close icon"></i>
+  <div class="header"> Logout Session </div>
+  <div class="content">
+    <p style="color: red; font-weight: bold;">Are you sure you want to Logout?</p>
+    <p>This will wipe the session credentials. You will need to scan the QR code again.</p>
+    <div class="ui message info hidden" id="logoutResult"></div>
+  </div>
+  <div class="actions">
+    <div class="ui cancel button secondary">No</div>
+    <div class="ui red right labeled icon button approve">Yes, Logout<i class="trash icon"></i></div>
+  </div>
+</div>
 
   <!-- Message Modals -->
 

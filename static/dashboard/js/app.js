@@ -7,6 +7,189 @@ let instanceToDelete = null;
 let isAdminLogin = false;
 let currentInstanceData = null;
 
+
+function getApiToken() {
+  const rawToken = localStorage.getItem('token');
+  if (!rawToken) {
+    showError("Auth token not found");
+    return null;
+  }
+  try {
+    return JSON.parse(rawToken).value;
+  } catch (e) {
+    showError("Error parsing auth token");
+    return null;
+  }
+}
+
+function doConnect() {
+  const eventsInput = document.getElementById('connectEvents').value;
+  const immediateInput = document.getElementById('connectImmediate').checked;
+  
+  const subscribeArray = eventsInput.split(',').map(s => s.trim()).filter(s => s !== "");
+
+  const payload = {
+    Subscribe: subscribeArray,
+    Immediate: immediateInput
+  };
+
+  const apiToken = getApiToken();
+  if (!apiToken) return;
+
+  fetch('/session/connect', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'token': apiToken
+    },
+    body: JSON.stringify(payload)
+  })
+  .then(response => {
+    if (!response.ok) throw new Error("HTTP Status " + response.status);
+    return response.json();
+  })
+  .then(data => {
+    if (data.error) {
+      showError(data.error);
+      const resultDiv = document.getElementById('connectResult');
+      resultDiv.classList.remove('hidden');
+      resultDiv.innerText = "Error: " + data.error;
+    } else {
+
+      showSuccess('Connection initiated successfully');
+
+      const resultDiv = document.getElementById('connectResult');
+      resultDiv.classList.remove('hidden');
+      resultDiv.innerHTML = JSON.stringify(data, null, 2);
+    }
+  })
+  .catch(error => {
+    console.error(error);
+    showError('Error connecting session');
+  });
+}
+
+function doDisconnect() {
+  const apiToken = getApiToken();
+  if (!apiToken) return;
+
+  fetch('/session/disconnect', {
+    method: 'POST',
+    headers: { 'token': apiToken }
+  })
+  .then(response => {
+    if (!response.ok) throw new Error("HTTP Status " + response.status);
+    return response.json();
+  })
+  .then(data => {
+    if (data.error) {
+        showError(data.error);
+        const resultDiv = document.getElementById('disconnectResult');
+        resultDiv.classList.remove('hidden');
+        resultDiv.innerText = "Error: " + data.error;
+    } else {
+        showSuccess('Session disconnected successfully');
+        
+        const resultDiv = document.getElementById('disconnectResult');
+        resultDiv.classList.remove('hidden');
+        resultDiv.innerText = data.Details || "Disconnected";
+    }
+  })
+  .catch(error => {
+    console.error(error);
+    showError('Error disconnecting session');
+  });
+}
+
+function doLogout() {
+  const apiToken = getApiToken();
+  if (!apiToken) return;
+
+  fetch('/session/logout', {
+    method: 'POST',
+    headers: { 'token': apiToken }
+  })
+  .then(response => {
+    if (!response.ok) throw new Error("HTTP Status " + response.status);
+    return response.json();
+  })
+  .then(data => {
+    if (data.error) {
+        showError(data.error);
+    } else {
+
+        showSuccess('Session logged out successfully');
+
+        const resultDiv = document.getElementById('logoutResult');
+        resultDiv.classList.remove('hidden');
+        resultDiv.innerText = data.Details || "Logged out";
+        setTimeout(() => $('#modalSessionLogout').modal('hide'), 1000);
+    }
+  })
+  .catch(error => {
+    console.error(error);
+    showError('Error logging out');
+  });
+}
+
+function eventsToSessions(){
+  const btnConnect = document.getElementById('sessionConnect');
+  if (btnConnect) {
+      btnConnect.addEventListener('click', function() {
+        const resContainer = document.getElementById('connectResult');
+        if(resContainer) {
+            resContainer.innerHTML = '';
+            resContainer.classList.add('hidden');
+        }
+        
+        $('#modalSessionConnect').modal({
+          closable: false,
+          onApprove: function() {
+            doConnect();
+            return false;
+          }
+        }).modal('show');
+      });
+  }
+
+  const btnDisconnect = document.getElementById('sessionDisconnect');
+  if (btnDisconnect) {
+      btnDisconnect.addEventListener('click', function() {
+        const resContainer = document.getElementById('disconnectResult');
+        if(resContainer) {
+            resContainer.innerHTML = '';
+            resContainer.classList.add('hidden');
+        }
+
+        $('#modalSessionDisconnect').modal({
+          onApprove: function() {
+            doDisconnect();
+            return false; 
+          }
+        }).modal('show');
+      });
+  }
+
+  const btnLogout = document.getElementById('sessionLogout');
+  if (btnLogout) {
+      btnLogout.addEventListener('click', function() {
+        const resContainer = document.getElementById('logoutResult');
+        if(resContainer) {
+            resContainer.innerHTML = '';
+            resContainer.classList.add('hidden');
+        }
+
+        $('#modalSessionLogout').modal({
+          onApprove: function() {
+            doLogout();
+            return false;
+          }
+        }).modal('show');
+      });
+  }
+
+}
+
 document.addEventListener('DOMContentLoaded', function() {
 
   let isHandlingChange = false;
@@ -231,6 +414,9 @@ document.addEventListener('DOMContentLoaded', function() {
       return false;
     }}).modal('show');
   });
+
+  userInfo(); 
+  eventsToSessions();
 
   document.getElementById('userAvatar').addEventListener('click', function() {
     document.getElementById('userAvatarContainer').innerHTML='';
@@ -804,6 +990,7 @@ async function sendTextMessage() {
 }
  
 async function deleteMessage() {
+  const token = getLocalStorageItem('token');
   const deletePhone = document.getElementById('messagedeletephone').value.trim();
   const deleteId = document.getElementById('messagedeleteid').value;
   const myHeaders = new Headers();

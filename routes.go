@@ -15,11 +15,14 @@ type Middleware = alice.Constructor
 
 func (s *server) routes() {
 
-	ex, err := os.Executable()
-	if err != nil {
-		panic(err)
+	staticPath := "./static/"
+
+	if os.Getenv("GO_ENV") != "dev" {
+		ex, err := os.Executable()
+		if err == nil {
+			staticPath = filepath.Join(filepath.Dir(ex), "static")
+		}
 	}
-	exPath := filepath.Dir(ex)
 
 	var routerLog zerolog.Logger
 	logOutput := os.Stdout
@@ -108,14 +111,16 @@ func (s *server) routes() {
 	s.router.Handle("/chat/send/image", c.Then(s.SendImage())).Methods("POST")
 	s.router.Handle("/chat/send/audio", c.Then(s.SendAudio())).Methods("POST")
 	s.router.Handle("/chat/send/document", c.Then(s.SendDocument())).Methods("POST")
-	//	s.router.Handle("/chat/send/template", c.Then(s.SendTemplate())).Methods("POST")
 	s.router.Handle("/chat/send/video", c.Then(s.SendVideo())).Methods("POST")
 	s.router.Handle("/chat/send/sticker", c.Then(s.SendSticker())).Methods("POST")
 	s.router.Handle("/chat/send/location", c.Then(s.SendLocation())).Methods("POST")
 	s.router.Handle("/chat/send/contact", c.Then(s.SendContact())).Methods("POST")
 	s.router.Handle("/chat/react", c.Then(s.React())).Methods("POST")
-	s.router.Handle("/chat/send/buttons", c.Then(s.SendButtons())).Methods("POST")
+
+	s.router.Handle("/chat/send/buttons", c.Then(s.SendInteractiveButtons())).Methods("POST")
 	s.router.Handle("/chat/send/list", c.Then(s.SendList())).Methods("POST")
+	s.router.Handle("/chat/send/carousel", c.Then(s.SendCarousel())).Methods("POST")
+
 	s.router.Handle("/chat/send/poll", c.Then(s.SendPoll())).Methods("POST")
 	s.router.Handle("/chat/send/edit", c.Then(s.SendEditMessage())).Methods("POST")
 	s.router.Handle("/chat/history", c.Then(s.GetHistory())).Methods("GET")
@@ -141,6 +146,9 @@ func (s *server) routes() {
 	s.router.Handle("/chat/downloaddocument", c.Then(s.DownloadDocument())).Methods("POST")
 	s.router.Handle("/chat/downloadsticker", c.Then(s.DownloadSticker())).Methods("POST")
 
+	s.router.Handle("/chat/label/edit", c.Then(s.HandleLabelEdit())).Methods("POST")
+	s.router.Handle("/chat/label/assign", c.Then(s.HandleLabelAssign())).Methods("POST")
+
 	s.router.Handle("/group/create", c.Then(s.CreateGroup())).Methods("POST")
 	s.router.Handle("/group/list", c.Then(s.ListGroups())).Methods("GET")
 	s.router.Handle("/group/info", c.Then(s.GetGroupInfo())).Methods("GET")
@@ -159,5 +167,7 @@ func (s *server) routes() {
 
 	s.router.Handle("/newsletter/list", c.Then(s.ListNewsletter())).Methods("GET")
 
-	s.router.PathPrefix("/").Handler(http.FileServer(http.Dir(exPath + "/static/")))
+	s.router.Handle("/misc/phone", c.Then(s.GetFormattedPhone())).Methods("POST")
+
+	s.router.PathPrefix("/").Handler(http.FileServer(http.Dir(staticPath)))
 }
