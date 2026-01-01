@@ -808,284 +808,234 @@ func (s *server) GetStatus() http.HandlerFunc {
 	}
 }
 
-// Sends a document/attachment message
+// Sends a Document message
 func (s *server) SendDocument() http.HandlerFunc {
-
-	type documentStruct struct {
-		Caption     string
+	type docStruct struct {
 		Phone       string
 		Document    string
+		Url         string `json:"url"`
 		FileName    string
+		Caption     string
 		Id          string
 		MimeType    string
-		ContextInfo waE2E.ContextInfo
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t documentStruct
+		var req docStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
+			return
+		}
+		if req.FileName == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing FileName"))
+			return
+		}
+
+		var filedata []byte
+		var mimeType string
 		var err error
-		err = decoder.Decode(&t)
+
+		if req.Url != "" {
+			filedata, mimeType, err = downloadMedia(req.Url)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, err)
+				return
+			}
+		} else if req.Document != "" {
+			if strings.HasPrefix(req.Document, "data:") {
+				dataURL, _ := dataurl.DecodeString(req.Document)
+				filedata = dataURL.Data
+				mimeType = dataURL.ContentType()
+			} else {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("invalid base64"))
+				return
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Url or Document"))
+			return
+		}
+
+		if req.MimeType != "" {
+			mimeType = req.MimeType
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
-
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-
-		if t.Document == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Document in Payload"))
-			return
-		}
-
-		if t.FileName == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing FileName in Payload"))
-			return
-		}
-
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
-		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
-
-		if t.Document[0:29] == "data:application/octet-stream" {
-			var dataURL, err = dataurl.DecodeString(t.Document)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
-				return
-			} else {
-				filedata = dataURL.Data
-				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaDocument)
-				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
-
-					return
-				}
-			}
-		} else {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("document data should start with \"data:application/octet-stream;base64,\""))
+		uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaDocument)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
 			return
 		}
 
 		msg := &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
-			URL:        proto.String(uploaded.URL),
-			FileName:   &t.FileName,
-			DirectPath: proto.String(uploaded.DirectPath),
-			MediaKey:   uploaded.MediaKey,
-			Mimetype: proto.String(func() string {
-				if t.MimeType != "" {
-					return t.MimeType
-				}
-				return http.DetectContentType(filedata)
-			}()),
+			URL:           proto.String(uploaded.URL),
+			FileName:      proto.String(req.FileName),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(mimeType),
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
-			Caption:       proto.String(t.Caption),
+			Caption:       proto.String(req.Caption),
 		}}
+		s.fillContextInfo(msg, &req.ContextInfo)
 
-		if t.ContextInfo.StanzaID != nil {
-			msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.DocumentMessage.ContextInfo == nil {
-				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.DocumentMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.DocumentMessage.ContextInfo == nil {
-				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.DocumentMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
-
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
 			return
 		}
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "document", t.Caption, "", historyLimit)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "document", req.Caption, "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
-// Sends an audio message
+// Sends an Audio message (Voice Note or Audio File) with Auto-Conversion and Waveform
 func (s *server) SendAudio() http.HandlerFunc {
 
 	type audioStruct struct {
 		Phone       string
 		Audio       string
-		Caption     string
+		Url         string `json:"url"`
 		Id          string
-		PTT         *bool  `json:"ptt,omitempty"`
-		MimeType    string `json:"mimetype,omitempty"`
-		Seconds     uint32
-		Waveform    []byte
-		ContextInfo waE2E.ContextInfo
+		PTT         *bool             `json:"ptt"`
+		MimeType    string            `json:"mimetype"`
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t audioStruct
-		err := decoder.Decode(&t)
+		var req audioStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
+			return
+		}
+
+		var filedata []byte
+		var mimeType string
+		var err error
+
+		if req.Url != "" {
+			filedata, mimeType, err = downloadMedia(req.Url)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("download failed: %v", err))
+				return
+			}
+		} else if req.Audio != "" {
+
+			if strings.HasPrefix(req.Audio, "data:") {
+				dataURL, _ := dataurl.DecodeString(req.Audio)
+				filedata = dataURL.Data
+				mimeType = dataURL.ContentType()
+			} else {
+				filedata, _ = base64.StdEncoding.DecodeString(req.Audio)
+				mimeType = http.DetectContentType(filedata)
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Url or Audio"))
+			return
+		}
+
+		isPTT := true
+		if req.PTT != nil {
+			isPTT = *req.PTT
+		}
+
+		if req.MimeType != "" {
+			mimeType = req.MimeType
+		}
+
+		if isPTT {
+			if !strings.Contains(mimeType, "ogg") && !strings.Contains(mimeType, "opus") {
+				convertedData, err := convertToOpus(filedata)
+				if err != nil {
+					fmt.Printf("⚠️ FFmpeg conversion failed: %v. Sending original format.\n", err)
+				} else {
+
+					filedata = convertedData
+					mimeType = "audio/ogg; codecs=opus"
+				}
+			}
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
-
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-
-		if t.Audio == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Audio in Payload"))
-			return
-		}
-
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
-		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
-
-		if strings.HasPrefix(t.Audio, "data:audio/") {
-			var dataURL, err = dataurl.DecodeString(t.Audio)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
-				return
-			} else {
-				filedata = dataURL.Data
-				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaAudio)
-				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
-
-					return
-				}
-			}
-		} else {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("audio data should start with \"data:audio/\""))
+		uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaAudio)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
 			return
 		}
 
-		// Configure PTT (Push to Talk) - default is true, setting it to false is a breaking change
-		ptt := true
-		if t.PTT != nil {
-			ptt = *t.PTT
-		}
-
-		// Configure MIME type
-		var mime string
-		if t.MimeType != "" {
-			mime = t.MimeType
-		} else {
-			// Default MIME types based on PTT setting
-			if ptt {
-				mime = "audio/ogg; codecs=opus"
-			} else {
-				mime = "audio/mpeg"
-			}
-		}
-
-		msg := &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
+		audioMsg := &waE2E.AudioMessage{
 			URL:           proto.String(uploaded.URL),
 			DirectPath:    proto.String(uploaded.DirectPath),
 			MediaKey:      uploaded.MediaKey,
-			Mimetype:      &mime,
+			Mimetype:      proto.String(mimeType),
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
-			PTT:           &ptt,
-			Seconds:       proto.Uint32(t.Seconds),
-			Waveform:      t.Waveform,
-		}}
-
-		if t.ContextInfo.StanzaID != nil {
-			msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.AudioMessage.ContextInfo == nil {
-				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.AudioMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+			PTT:           proto.Bool(isPTT),
 		}
 
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.AudioMessage.ContextInfo == nil {
-				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.AudioMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		audioMsg.Waveform = generateFakeWaveform()
+
+		msg := &waE2E.Message{
+			AudioMessage: audioMsg,
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		s.fillContextInfo(msg, &req.ContextInfo)
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
 			return
 		}
 
@@ -1093,23 +1043,18 @@ func (s *server) SendAudio() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "audio", "", "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
-// Sends an Image message
+// Sends an Image message (URL or Base64)
 func (s *server) SendImage() http.HandlerFunc {
-
 	type imageStruct struct {
 		Phone       string
-		Image       string
+		Image       string // Base64 Legacy
+		Url         string `json:"url"`
 		Caption     string
 		Id          string
 		MimeType    string
@@ -1117,185 +1062,123 @@ func (s *server) SendImage() http.HandlerFunc {
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t imageStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		var req imageStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
 
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
 			return
 		}
 
-		if t.Image == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Image in Payload"))
+		var filedata []byte
+		var mimeType string
+		var err error
+
+		if req.Url != "" {
+			filedata, mimeType, err = downloadMedia(req.Url)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to download image: %v", err))
+				return
+			}
+		} else if req.Image != "" {
+			if strings.HasPrefix(req.Image, "data:") {
+				var dataURL *dataurl.DataURL
+				dataURL, err = dataurl.DecodeString(req.Image)
+				if err != nil {
+					s.Respond(w, r, http.StatusBadRequest, errors.New("invalid base64"))
+					return
+				}
+				filedata = dataURL.Data
+				mimeType = dataURL.ContentType()
+			} else {
+				filedata, err = base64.StdEncoding.DecodeString(req.Image)
+				if err != nil {
+					s.Respond(w, r, http.StatusBadRequest, errors.New("invalid image data format"))
+					return
+				}
+				mimeType = http.DetectContentType(filedata)
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Url or Image"))
 			return
 		}
 
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
+		if req.MimeType != "" {
+			mimeType = req.MimeType
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
+		uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
+			return
+		}
+
 		var thumbnailBytes []byte
-
-		if len(t.Image) >= 10 && t.Image[0:10] == "data:image" {
-			var dataURL, err = dataurl.DecodeString(t.Image)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
-				return
-			} else {
-				filedata = dataURL.Data
-			}
-		} else if isHTTPURL(t.Image) {
-			data, ct, err := fetchURLBytes(r.Context(), t.Image, openGraphImageMaxBytes)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to fetch image from url: %v", err))
-				return
-			}
-			mimeType := ct
-			if !strings.HasPrefix(strings.ToLower(mimeType), "image/") {
-				mimeType = "image/jpeg"
-			}
-			imgDataURL := dataurl.New(data, mimeType)
-			parsed, err := dataurl.DecodeString(imgDataURL.String())
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("could not re-encode image to base64"))
-				return
-			}
-			filedata = parsed.Data
-		} else {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("Image data should start with \"data:image/png;base64,\""))
-			return
-		}
-
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaImage)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
-			return
-		}
-
-		// decode jpeg into image.Image
-		reader := bytes.NewReader(filedata)
-		img, _, err := image.Decode(reader)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not decode image for thumbnail preparation: %v", err))
-			return
-		}
-
-		// resize to width 72 using Lanczos resampling and preserve aspect ratio
-		m := resize.Thumbnail(72, 72, img, resize.Lanczos3)
-
-		tmpFile, err := os.CreateTemp("", "resized-*.jpg")
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Could not create temp file for thumbnail: %v", err))
-			return
-		}
-		defer tmpFile.Close()
-
-		// write new image to file
-		if err := jpeg.Encode(tmpFile, m, nil); err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Failed to encode jpeg: %v", err))
-			return
-		}
-
-		thumbnailBytes, err = os.ReadFile(tmpFile.Name())
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Failed to read %s: %v", tmpFile.Name(), err))
-			return
+		if img, _, err := image.Decode(bytes.NewReader(filedata)); err == nil {
+			m := resize.Thumbnail(72, 72, img, resize.Lanczos3)
+			buf := new(bytes.Buffer)
+			jpeg.Encode(buf, m, nil)
+			thumbnailBytes = buf.Bytes()
 		}
 
 		msg := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-			Caption:    proto.String(t.Caption),
-			URL:        proto.String(uploaded.URL),
-			DirectPath: proto.String(uploaded.DirectPath),
-			MediaKey:   uploaded.MediaKey,
-			Mimetype: proto.String(func() string {
-				if t.MimeType != "" {
-					return t.MimeType
-				}
-				return http.DetectContentType(filedata)
-			}()),
+			Caption:       proto.String(req.Caption),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(mimeType),
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
 			JPEGThumbnail: thumbnailBytes,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			if msg.ImageMessage.ContextInfo == nil {
-				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-				}
-			}
-		}
+		s.fillContextInfo(msg, &req.ContextInfo)
 
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.ImageMessage.ContextInfo == nil {
-				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ImageMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.ImageMessage.ContextInfo == nil {
-				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ImageMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
 			return
 		}
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "image", t.Caption, "", historyLimit)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "image", req.Caption, "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
-// Sends Sticker message
+// Sends Sticker message (URL or Base64)
 func (s *server) SendSticker() http.HandlerFunc {
 
 	type stickerStruct struct {
 		Phone         string
-		Sticker       string
+		Sticker       string // Base64 Legacy
+		Url           string `json:"url"`
 		Id            string
 		PngThumbnail  []byte
 		MimeType      string
@@ -1303,73 +1186,76 @@ func (s *server) SendSticker() http.HandlerFunc {
 		PackName      string
 		PackPublisher string
 		Emojis        []string
-		ContextInfo   waE2E.ContextInfo
+		ContextInfo   waE2E.ContextInfo `json:"contextInfo"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t stickerStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		var req stickerStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
 
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
 			return
 		}
 
-		if t.Sticker == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Sticker in Payload"))
+		if req.Url != "" {
+			filedata, mime, err := downloadMedia(req.Url)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to download media: %v", err))
+				return
+			}
+
+			req.Sticker = dataurl.New(filedata, mime).String()
+
+			// Si no especificaron mime, usamos el detectado
+			if req.MimeType == "" {
+				req.MimeType = mime
+			}
+		}
+
+		if req.Sticker == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Url or Sticker data"))
 			return
 		}
 
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
 		processedData, detectedMimeType, err := processStickerData(
-			t.Sticker,
-			t.MimeType,
-			t.PackId,
-			t.PackName,
-			t.PackPublisher,
-			t.Emojis,
+			req.Sticker,
+			req.MimeType,
+			req.PackId,
+			req.PackName,
+			req.PackPublisher,
+			req.Emojis,
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to process sticker data")
-			status := http.StatusBadRequest
-			if strings.Contains(err.Error(), "failed to convert") {
-				status = http.StatusInternalServerError
-			}
-			s.Respond(w, r, status, errors.New(err.Error()))
+			s.Respond(w, r, http.StatusBadRequest, errors.New(err.Error()))
 			return
 		}
 
-		uploaded, err := clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), processedData, whatsmeow.MediaImage)
+		uploaded, err := client.Upload(context.Background(), processedData, whatsmeow.MediaImage)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Failed to upload file: %v", err))
-
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
 			return
 		}
 
@@ -1381,33 +1267,14 @@ func (s *server) SendSticker() http.HandlerFunc {
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(processedData))),
-			PngThumbnail:  t.PngThumbnail,
+			PngThumbnail:  req.PngThumbnail,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.StickerMessage.ContextInfo == nil {
-				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.StickerMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
+		s.fillContextInfo(msg, &req.ContextInfo)
 
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.StickerMessage.ContextInfo == nil {
-				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.StickerMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("Error sending message: %v", err))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
 			return
 		}
 
@@ -1415,170 +1282,133 @@ func (s *server) SendSticker() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "sticker", "", "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
-// Sends Video message
+// Sends a Video message (Standard, GIF, or PTV/Video Note)
 func (s *server) SendVideo() http.HandlerFunc {
-
-	type imageStruct struct {
-		Phone         string
-		Video         string
-		Caption       string
-		Id            string
-		JPEGThumbnail []byte
-		MimeType      string
-		ContextInfo   waE2E.ContextInfo
+	type videoStruct struct {
+		Phone       string
+		Video       string
+		Url         string `json:"url"`
+		Caption     string
+		Id          string
+		MimeType    string
+		IsGIF       bool              `json:"is_gif"`
+		IsPTV       bool              `json:"is_ptv"`
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t imageStruct
-		err := decoder.Decode(&t)
+		var req videoStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
+			return
+		}
+
+		var filedata []byte
+		var mimeType string
+		var err error
+
+		if req.Url != "" {
+			filedata, mimeType, err = downloadMedia(req.Url)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("download failed: %v", err))
+				return
+			}
+		} else if req.Video != "" {
+			if strings.HasPrefix(req.Video, "data:") {
+				dataURL, _ := dataurl.DecodeString(req.Video)
+				filedata = dataURL.Data
+				mimeType = dataURL.ContentType()
+			} else {
+				filedata, _ = base64.StdEncoding.DecodeString(req.Video)
+				mimeType = "video/mp4"
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Url or Video"))
+			return
+		}
+
+		if req.MimeType != "" {
+			mimeType = req.MimeType
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
-
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-
-		if t.Video == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Video in Payload"))
-			return
-		}
-
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
-		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
-
-		if t.Video[0:4] == "data" {
-			var dataURL, err = dataurl.DecodeString(t.Video)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
-				return
-			} else {
-				filedata = dataURL.Data
-
-			}
-		} else if isHTTPURL(t.Video) {
-			data, ct, err := fetchURLBytes(r.Context(), t.Video, openGraphImageMaxBytes)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to fetch image from url: %v", err))
-
-				return
-			}
-			mimeType := ct
-			if !strings.HasPrefix(strings.ToLower(mimeType), "video/") {
-				mimeType = "video/mpeg"
-			}
-			imgDataURL := dataurl.New(data, mimeType)
-			parsed, err := dataurl.DecodeString(imgDataURL.String())
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("could not re-encode video to base64"))
-				return
-			}
-			filedata = parsed.Data
-
-		} else {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("data should start with \"data:mime/type;base64,\""))
-			return
-		}
-
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaVideo)
+		uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaVideo)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
 			return
 		}
 
-		msg := &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
-			Caption:    proto.String(t.Caption),
-			URL:        proto.String(uploaded.URL),
-			DirectPath: proto.String(uploaded.DirectPath),
-			MediaKey:   uploaded.MediaKey,
-			Mimetype: proto.String(func() string {
-				if t.MimeType != "" {
-					return t.MimeType
-				}
-				return http.DetectContentType(filedata)
-			}()),
+		videoMsg := &waE2E.VideoMessage{
+			Caption:       proto.String(req.Caption),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(mimeType),
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
-			JPEGThumbnail: t.JPEGThumbnail,
-		}}
-
-		if t.ContextInfo.StanzaID != nil {
-			msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.VideoMessage.ContextInfo == nil {
-				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.VideoMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+			GifPlayback:   proto.Bool(req.IsGIF),
 		}
 
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.VideoMessage.ContextInfo == nil {
-				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.VideoMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		msg := &waE2E.Message{}
+
+		if req.IsPTV {
+			videoMsg.Caption = nil
+			msg.PtvMessage = videoMsg
+		} else {
+			msg.VideoMessage = videoMsg
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		s.fillContextInfo(msg, &req.ContextInfo)
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
 			return
+		}
+
+		messageType := "video"
+		if req.IsGIF {
+			messageType = "gif"
+		} else if req.IsPTV {
+			messageType = "video_note"
 		}
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "video", t.Caption, "", historyLimit)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, messageType, req.Caption, "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -2604,20 +2434,22 @@ func (s *server) GetContacts() http.HandlerFunc {
 	}
 }
 
-// Sets Chat Presence (typing/paused/recording audio)
+// Sets Chat Presence (typing/paused/recording audio) with Duration support
 func (s *server) ChatPresence() http.HandlerFunc {
 
 	type chatPresenceStruct struct {
-		Phone string
-		State string
-		Media types.ChatPresenceMedia
+		Phone    string                  `json:"phone"`
+		State    string                  `json:"state"`
+		Media    types.ChatPresenceMedia `json:"media"`
+		Duration int                     `json:"duration"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
@@ -2640,26 +2472,37 @@ func (s *server) ChatPresence() http.HandlerFunc {
 			return
 		}
 
-		jid, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, nil, nil)
+		jid, err := validateMessageFields(client, t.Phone, nil, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("Error parsing Phone")
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Group JID"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse JID"))
 			return
 		}
 
-		err = clientManager.GetWhatsmeowClient(txtid).SendChatPresence(context.Background(), jid, types.ChatPresence(t.State), types.ChatPresenceMedia(t.Media))
+		err = client.SendChatPresence(context.Background(), jid, types.ChatPresence(t.State), t.Media)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("failure sending chat presence to Whatsapp servers"))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("failure sending chat presence"))
 			return
 		}
 
-		response := map[string]interface{}{"Details": "Chat presence set successfuly"}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+		isActive := t.State == string(types.ChatPresenceComposing) || t.Media == types.ChatPresenceMediaAudio
+
+		if t.Duration > 0 && isActive {
+			go func(waitSeconds int, targetJID types.JID) {
+				time.Sleep(time.Duration(waitSeconds) * time.Second)
+
+				_ = client.SendChatPresence(context.Background(), targetJID, types.ChatPresencePaused, "")
+
+				log.Debug().Str("jid", targetJID.String()).Msg("Auto-paused presence after duration")
+			}(t.Duration, jid)
 		}
+
+		response := map[string]interface{}{
+			"Details":  "Chat presence set successfully",
+			"Duration": t.Duration,
+		}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -6886,5 +6729,57 @@ func (s *server) HandleLabelAssign() http.HandlerFunc {
 		}
 		jsonResp, _ := json.Marshal(response)
 		s.Respond(w, r, http.StatusOK, string(jsonResp))
+	}
+}
+
+// Helper for ContextInfo
+func (s *server) fillContextInfo(msg *waE2E.Message, ctxInfo *waE2E.ContextInfo) {
+	if ctxInfo == nil {
+		return
+	}
+
+	var targetContext *waE2E.ContextInfo
+
+	if msg.ImageMessage != nil {
+		if msg.ImageMessage.ContextInfo == nil {
+			msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
+		}
+		targetContext = msg.ImageMessage.ContextInfo
+	} else if msg.VideoMessage != nil {
+		if msg.VideoMessage.ContextInfo == nil {
+			msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
+		}
+		targetContext = msg.VideoMessage.ContextInfo
+	} else if msg.AudioMessage != nil {
+		if msg.AudioMessage.ContextInfo == nil {
+			msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
+		}
+		targetContext = msg.AudioMessage.ContextInfo
+	} else if msg.DocumentMessage != nil {
+		if msg.DocumentMessage.ContextInfo == nil {
+			msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
+		}
+		targetContext = msg.DocumentMessage.ContextInfo
+	} else if msg.StickerMessage != nil {
+		if msg.StickerMessage.ContextInfo == nil {
+			msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
+		}
+		targetContext = msg.StickerMessage.ContextInfo
+	} else {
+		return
+	}
+
+	if ctxInfo.StanzaID != nil {
+		targetContext.StanzaID = ctxInfo.StanzaID
+		targetContext.Participant = ctxInfo.Participant
+		targetContext.QuotedMessage = &waE2E.Message{Conversation: proto.String("")}
+	}
+
+	if len(ctxInfo.MentionedJID) > 0 {
+		targetContext.MentionedJID = ctxInfo.MentionedJID
+	}
+
+	if ctxInfo.IsForwarded != nil && *ctxInfo.IsForwarded {
+		targetContext.IsForwarded = proto.Bool(true)
 	}
 }

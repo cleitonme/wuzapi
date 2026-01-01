@@ -1949,6 +1949,8 @@ paths:
             application/json:
               schema:
                 example: { "code": 200, "data": { "Details": "Chat presence set successfuly" }, "success": true } 
+  
+  
   /chat/history:
     get:
       tags:
@@ -2547,6 +2549,151 @@ paths:
                 example: { "code": 200, "data": { "Details": "Participants updated successfully" }, "success": true }
 
 definitions:
+
+
+  MessageImage:
+    type: object
+    required: 
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/image.jpg"
+        description: "Public URL of the image"
+      Image:
+        type: string
+        example: "data:image/jpeg;base64,..."
+        description: "Base64 data (Legacy)"
+      Caption:
+        type: string
+        example: "Look at this picture"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageVideo:
+    type: object
+    required: 
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/video.mp4"
+        description: "Public URL of the video"
+      Video:
+        type: string
+        description: "Base64 data (Legacy)"
+      Caption:
+        type: string
+        example: "My video"
+      is_ptv:
+        type: boolean
+        description: "Send as Video Note (Circular video). Max 60s."
+        example: false
+      is_gif:
+        type: boolean
+        description: "Send as animated GIF (muted loop)"
+        example: false
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageAudio:
+    type: object
+    required:
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/audio.ogg"
+        description: "Public URL of the audio"
+      Audio:
+        type: string
+        description: "Base64 data (Legacy)"
+      ptt:
+        type: boolean
+        description: "True for Voice Note (Green mic), False for Audio File (Orange icon)"
+        example: true
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageDocument:
+    type: object
+    required: 
+      - Phone
+      - FileName 
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://example.com/file.pdf"
+        description: "Public URL of the document"
+      Document:
+        type: string
+        example: "data:application/pdf;base64,..."
+        description: "Base64 data (Legacy)"
+      FileName:
+        type: string
+        example: "invoice.pdf"
+      Caption:
+        type: string
+        example: "Here is your invoice"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
+  MessageSticker:
+    type: object
+    required: 
+      - Phone
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Url:
+        type: string
+        example: "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png"
+        description: "Public URL of the image (PNG/JPG/WEBP) to convert to sticker."
+      Sticker:
+        type: string
+        description: "Base64 data (Legacy)"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      PackName:
+        type: string
+        example: "My Bot Pack"
+      PackPublisher:
+        type: string
+        example: "Wuzapi"
+      Emojis:
+        type: array
+        items:
+          type: string
+        example: ["🤖", "🔥"]
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+
   ContextInfo:
     type: object
     description: "Optional context info for replies"
@@ -2805,6 +2952,8 @@ definitions:
         type: string
       FileLength:
         type: number
+  
+  
   ChatPresence:
     type: object
     required: 
@@ -2816,10 +2965,20 @@ definitions:
         example: "5491155553935"
       State:
         type: string
+        description: "State of presence: 'composing' (typing) or 'paused'"
         example: composing
+        enum: [composing, paused]
       Media: 
         type: string
+        description: "If recording audio, set this to 'audio'. Otherwise leave empty."
         example: audio
+        enum: [audio]
+      Duration:
+        type: integer
+        description: "Optional: Number of seconds to maintain the state before automatically sending 'paused'. Simulates human behavior."
+        example: 3
+        
+  
   StatusText:
     type: object
     required:
@@ -3015,141 +3174,7 @@ definitions:
         type: string
         description: "Text content of the message being replied to (for displaying quote preview)"
         example: "Original message text"
-  MessageImage:
-    type: object
-    required: 
-      - Phone
-      - Image
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Image:
-        type: string
-        example: data:image/jpeg;base64,iVBORw0
-      Caption:
-        type: string
-        example: Image Description
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-  MessageAudio:
-    type: object
-    required:
-      - Phone
-      - Audio
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Audio:
-        type: string
-        example: "data:audio/ogg;base64,iVBORw0a"
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      PTT:
-        type: boolean
-        example: true
-      MimeType:
-        type: string
-        example: "audio/ogg; codecs=opus"
-      Seconds:
-        type: integer
-        format: uint32
-        example: 15
-      Waveform:
-        type: array
-        items:
-          type: integer
-          format: byte
-        example: [0, 0, 0, 12, 20, 20, 22, 10, 5, 0, 0, 0]
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-  MessageVideo:
-    type: object
-    required: 
-      - Phone
-      - Video 
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Video:
-        type: string
-        example: "data:video/mp4;base64,iVBORw0"
-      Caption:
-        type: string
-        example: "my video"
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      JpegThumbnail:
-        type: string
-        example: "AA00D010"
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-  MessageSticker:
-    type: object
-    required: 
-      - Phone
-      - Sticker
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Sticker:
-        type: string
-        example: "data:image/webp;base64,iVBORw0"
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      PngThumbnail:
-        type: string
-        example: "AA00D010"
-      MimeType:
-        type: string
-        example: "image/webp"
-      PackId:
-        type: string
-        example: "my.sticker.pack.id"
-      PackName:
-        type: string
-        example: "My Pack"
-      PackPublisher:
-        type: string
-        example: "Wuzapi"
-      Emojis:
-        type: array
-        items:
-          type: string
-        example: ["😀", "🎉"]
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
-        description: "Optional context info for replies, mentions, and forwarding"
-  MessageDocument:
-    type: object
-    required: 
-      - Phone
-      - Document 
-      - FileName 
-    properties:
-      Phone:
-        type: string
-        example: "5491155553935"
-      Document:
-        type: string
-        example: data:application/octet-stream;base64,aG9sYSBxdWUKdGFsCmNvbW8KZXN0YXMK
-      FileName:
-        type: string
-        example: file.txt
-      Id:
-        type: string
-        example: "ABCDABCD1234"
-      ContextInfo:
-        $ref: "#/definitions/ContextInfo"
+
   MessageTemplate:
     type: object
     required: 
