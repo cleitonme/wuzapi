@@ -1516,109 +1516,159 @@ func (s *server) SendContact() http.HandlerFunc {
 	}
 }
 
-// Sends location
+// Sends location message (Full Business Location with Address)
 func (s *server) SendLocation() http.HandlerFunc {
 
 	type locationStruct struct {
-		Phone       string
-		Id          string
-		Name        string
-		Latitude    float64
-		Longitude   float64
-		ContextInfo waE2E.ContextInfo
+		Phone       string            `json:"phone"`
+		Id          string            `json:"id"`
+		Name        string            `json:"name"`    // Ej: "Oficinas Centrales"
+		Address     string            `json:"address"` // Ej: "Av. Reforma 222, CDMX"
+		Latitude    float64           `json:"latitude"`
+		Longitude   float64           `json:"longitude"`
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		decoder := json.NewDecoder(r.Body)
-		var t locationStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		var req locationStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-		if t.Latitude == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Latitude in Payload"))
-			return
-		}
-		if t.Longitude == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Longitude in Payload"))
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
 			return
 		}
 
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
+		if req.Latitude == 0 && req.Longitude == 0 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Latitude/Longitude"))
+			return
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
+			log.Error().Err(err).Msg("Error parsing Phone")
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
-		msg := &waE2E.Message{LocationMessage: &waE2E.LocationMessage{
-			DegreesLatitude:  &t.Latitude,
-			DegreesLongitude: &t.Longitude,
-			Name:             &t.Name,
-		}}
-
-		if t.ContextInfo.StanzaID != nil {
-			msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.LocationMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+		locMsg := &waE2E.LocationMessage{
+			DegreesLatitude:  proto.Float64(req.Latitude),
+			DegreesLongitude: proto.Float64(req.Longitude),
 		}
 
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.LocationMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		if req.Name != "" {
+			locMsg.Name = proto.String(req.Name)
+		}
+		if req.Address != "" {
+			locMsg.Address = proto.String(req.Address)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		msg := &waE2E.Message{
+			LocationMessage: locMsg,
+		}
+
+		s.fillContextInfo(msg, &req.ContextInfo)
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
-
 			return
 		}
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "location", t.Name, "", historyLimit)
+		logContent := fmt.Sprintf("Loc: %s (%f, %f)", req.Name, req.Latitude, req.Longitude)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "location", logContent, "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		// Anti-Panic
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
+
+// Sends a Poll with selectable options control
+func (s *server) SendPoll() http.HandlerFunc {
+	type pollRequest struct {
+		Group         string   `json:"group"`          // Phone/Group JID
+		Header        string   `json:"header"`         // Question
+		Options       []string `json:"options"`        // Answers
+		MaxSelectable int      `json:"max_selectable"` // 1 = Single Choice, 0 = Allow Multiple
+		Id            string   `json:"id"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
 		}
+
+		var req pollRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
+			return
+		}
+
+		if req.Group == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Group/Phone"))
+			return
+		}
+		if req.Header == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Header (Question)"))
+			return
+		}
+		if len(req.Options) < 2 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("at least 2 options are required"))
+			return
+		}
+
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
+		}
+
+		recipient, err := validateMessageFields(client, req.Group, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		selectableCount := req.MaxSelectable
+		if selectableCount == 0 {
+			selectableCount = len(req.Options)
+		}
+
+		pollMessage := client.BuildPollCreation(req.Header, req.Options, selectableCount)
+
+		resp, err := client.SendMessage(context.Background(), recipient, pollMessage, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send poll: %v", err))
+			return
+		}
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Poll sent")
+
+		response := map[string]interface{}{"Details": "Poll sent successfully", "Id": msgid}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -1803,80 +1853,6 @@ func (s *server) SendMessage() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-	}
-}
-
-func (s *server) SendPoll() http.HandlerFunc {
-	type pollRequest struct {
-		Group   string   `json:"group"`   // The recipient's group id (120363313346913103@g.us)
-		Header  string   `json:"header"`  // The poll's headline text
-		Options []string `json:"options"` // The list of poll options
-		Id      string
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
-			return
-		}
-
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		decoder := json.NewDecoder(r.Body)
-		var req pollRequest
-		err := decoder.Decode(&req)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
-			return
-		}
-
-		if req.Group == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Grouop in payload"))
-			return
-		}
-
-		if req.Header == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Header in payload"))
-			return
-		}
-
-		if len(req.Options) < 2 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("at least 2 options are required"))
-			return
-		}
-
-		if req.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = req.Id
-		}
-
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), req.Group, nil, nil)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, err)
-			return
-		}
-
-		pollMessage := clientManager.GetWhatsmeowClient(txtid).BuildPollCreation(req.Header, req.Options, 1)
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, pollMessage, whatsmeow.SendRequestExtra{ID: msgid})
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send poll: %v", err))
-
-			return
-		}
-
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Poll sent")
-
-		response := map[string]interface{}{"Details": "Poll sent successfully", "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
 	}
 }
 
@@ -5767,66 +5743,47 @@ func (s *server) RequestUnavailableMessage() http.HandlerFunc {
 }
 
 func (s *server) ArchiveChat() http.HandlerFunc {
-
 	type requestArchiveStruct struct {
-		Jid     string `json:"jid"`
+		Phone   string `json:"phone"`
 		Archive bool   `json:"archive"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
 		client := clientManager.GetWhatsmeowClient(txtid)
-
 		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t requestArchiveStruct
-		err := decoder.Decode(&t)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+		var req requestArchiveStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
 			return
 		}
 
-		// Validate required fields
-		if t.Jid == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing jid in Payload"))
+		jid, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		chatJID, err := types.ParseJID(t.Jid)
+		err = client.SendAppState(context.Background(), appstate.BuildArchive(jid, req.Archive, time.Time{}, nil))
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("invalid Chat JID format"))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to archive chat: %v", err))
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		status := "unarchived"
+		if req.Archive {
+			status = "archived"
+		}
 
-		err = client.SendAppState(ctx, appstate.BuildArchive(chatJID, t.Archive, time.Time{}, nil))
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to archive chat: %s", err))
-			return
-		}
-		statusText := "Chat archived"
-		if !t.Archive {
-			statusText = "Chat unarchived"
-		}
-		response := map[string]interface{}{
-			"success": true,
-			"message": statusText,
-		}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		// Anti-Panic
+		response := map[string]interface{}{"Details": "Chat " + status, "Phone": req.Phone}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
-
 }
 
 // Downloads Sticker and returns base64 representation
@@ -6781,5 +6738,229 @@ func (s *server) fillContextInfo(msg *waE2E.Message, ctxInfo *waE2E.ContextInfo)
 
 	if ctxInfo.IsForwarded != nil && *ctxInfo.IsForwarded {
 		targetContext.IsForwarded = proto.Bool(true)
+	}
+}
+
+// Pins or Unpins a Chat
+func (s *server) PinChat() http.HandlerFunc {
+	type pinReq struct {
+		Phone  string `json:"phone"`
+		Pinned bool   `json:"pinned"` // true = fijar, false = desfijar
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req pinReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		jid, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		err = client.SendAppState(context.Background(), appstate.BuildPin(jid, req.Pinned))
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to pin chat: %v", err))
+			return
+		}
+
+		status := "unpinned"
+		if req.Pinned {
+			status = "pinned"
+		}
+
+		// Anti-Panic
+		response := map[string]interface{}{"Details": "Chat " + status, "Phone": req.Phone}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
+
+// Star or Unstar a specific message
+func (s *server) StarMessage() http.HandlerFunc {
+	type starReq struct {
+		Phone     string `json:"phone"`
+		MessageID string `json:"message_id"`
+		Starred   bool   `json:"starred"` // true = estrella, false = quitar estrella
+		FromMe    bool   `json:"from_me"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req starReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.MessageID == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing message_id"))
+			return
+		}
+
+		chatJID, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		var senderJID types.JID
+		if req.FromMe {
+			if client.Store.ID == nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("client not logged in"))
+				return
+			}
+			senderJID = client.Store.ID.ToNonAD()
+		} else {
+			senderJID = chatJID
+		}
+
+		err = client.SendAppState(context.Background(), appstate.BuildStar(chatJID, senderJID, req.MessageID, req.FromMe, req.Starred))
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to star message: %v", err))
+			return
+		}
+
+		status := "unstarred"
+		if req.Starred {
+			status = "starred"
+		}
+
+		// Anti-Panic
+		response := map[string]interface{}{"Details": "Message " + status, "Id": req.MessageID}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
+
+// SendProduct sends a Native E-commerce Product Card (Fixed types)
+func (s *server) SendProduct() http.HandlerFunc {
+
+	type productReq struct {
+		Phone       string            `json:"phone"`
+		Title       string            `json:"title"`
+		Description string            `json:"description"`
+		Currency    string            `json:"currency"`
+		Price       float64           `json:"price"`
+		ImageUrl    string            `json:"image_url"`
+		ProductId   string            `json:"product_id"`
+		RetailerId  string            `json:"retailer_id"`
+		Url         string            `json:"url"`
+		Id          string            `json:"id"`
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req productReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
+			return
+		}
+		if req.ImageUrl == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing ImageUrl"))
+			return
+		}
+
+		filedata, mime, err := downloadMedia(req.ImageUrl)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to download product image: %v", err))
+			return
+		}
+
+		uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
+			return
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
+		}
+
+		price1000 := int64(req.Price * 1000)
+
+		prodID := req.ProductId
+		if prodID == "" {
+			prodID = "PROD-" + msgid
+		}
+
+		productMsg := &waE2E.ProductMessage{
+			Product: &waE2E.ProductMessage_ProductSnapshot{
+				ProductImage: &waE2E.ImageMessage{
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(mime),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(filedata))),
+				},
+				ProductID:         proto.String(prodID),
+				Title:             proto.String(req.Title),
+				Description:       proto.String(req.Description),
+				CurrencyCode:      proto.String(req.Currency),
+				PriceAmount1000:   proto.Int64(price1000),
+				RetailerID:        proto.String(req.RetailerId),
+				URL:               proto.String(req.Url),
+				ProductImageCount: proto.Uint32(1),
+			},
+			BusinessOwnerJID: proto.String(client.Store.ID.ToNonAD().String()),
+		}
+
+		msg := &waE2E.Message{
+			ProductMessage: productMsg,
+		}
+
+		s.fillContextInfo(msg, &req.ContextInfo)
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
+			return
+		}
+
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+		logContent := fmt.Sprintf("Product: %s ($%.2f %s)", req.Title, req.Price, req.Currency)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "product", logContent, "", historyLimit)
+
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }

@@ -1320,6 +1320,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/send/location:
     post:
       tags:
@@ -1342,6 +1344,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/send/contact:
     post:
       tags:
@@ -1817,6 +1821,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/downloadimage:
     post:
       tags:
@@ -1951,6 +1957,101 @@ paths:
                 example: { "code": 200, "data": { "Details": "Chat presence set successfuly" }, "success": true } 
   
   
+
+  /chat/pin:
+    post:
+      tags:
+        - Chat
+      summary: Pin/Unpin a Chat
+      description: Pins or unpins a chat to the top of the conversation list.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/ChatPin'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Chat pinned" }, "success": true }
+
+  /chat/star:
+    post:
+      tags:
+        - Chat
+      summary: Star/Unstar a Message
+      description: Stars (favorites) or unstars a specific message.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageStar'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Message starred" }, "success": true }
+                
+  /chat/archive:
+    post:
+      tags:
+        - Chat
+      summary: Archive/Unarchive a Chat
+      description: Moves a chat to the archive or brings it back.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/ChatArchive'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Chat archived" }, "success": true }
+
+
+
+
+
+  /chat/send/product:
+    post:
+      tags:
+        - Chat
+      summary: Send a Product Card
+      description: Sends a native e-commerce product message with image and price.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageProduct'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Sent" }, "success": true }
+
+
+
   /chat/history:
     get:
       tags:
@@ -2977,7 +3078,7 @@ definitions:
         type: integer
         description: "Optional: Number of seconds to maintain the state before automatically sending 'paused'. Simulates human behavior."
         example: 3
-        
+
   
   StatusText:
     type: object
@@ -3028,20 +3129,59 @@ definitions:
       Phone:
         type: string
         example: "5491155553935"
+      Latitude:
+        type: number
+        format: float
+        example: 19.432608
+      Longitude:
+        type: number
+        format: float
+        example: -99.133209
       Name:
         type: string
-        example: Party
+        description: "Name of the place or business (Optional)"
+        example: "Wuzapi HQ"
+      Address:
+        type: string
+        description: "Address line to display below the name (Optional)"
+        example: "Av. Tecnológica 123, Ciudad de México"
       Id:
         type: string
         example: "ABCDABCD1234"
-      Latitude:
-        type: float
-        example: 48.858370
-      Longitude:
-        type: float
-        example: 2.294481
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+
+  MessagePoll:
+    type: object
+    required:
+      - Group
+      - Header
+      - Options
+    properties:
+      Group:
+        type: string
+        description: "Recipient JID (User or Group)"
+        example: "120363417042313103@g.us"
+      Header:
+        type: string
+        description: "The question of the poll"
+        example: "What is the best framework?"
+      Options:
+        type: array
+        description: "List of options (Minimum 2)"
+        items:
+          type: string
+        example: ["Go", "Node.js", "Python"]
+      max_selectable:
+        type: integer
+        description: "How many options can be selected? Set 1 for Single Choice. Leave 0 for Multiple Choice."
+        example: 1
+      Id:
+        type: string
+        example: "3EB06F9067F80BAB89FF"
+
+
+  
   ReactionText:
     type: object
     required: 
@@ -3059,28 +3199,59 @@ definitions:
         type: string
         example: "me:3EB06F9067F80BAB89FF"
 
-  MessagePoll:
+  
+
+  ChatPin:
     type: object
     required:
-      - Group
-      - Header
-      - Options
+      - phone
+      - pinned
     properties:
-      Group:
+      phone:
         type: string
-        example: "120363417042313103@g.us"
-      Header:
+        example: "5215555555555"
+      pinned:
+        type: boolean
+        description: "True to pin, False to unpin"
+        example: true
+
+  MessageStar:
+    type: object
+    required:
+      - phone
+      - message_id
+      - starred
+    properties:
+      phone:
         type: string
-        example: "What's your favorite color"
-      Options:
-        type: array
-        description: An array of options for the poll.
-        items:
-          type: string
-          example: "Red"
-      Id:
+        example: "5215555555555"
+      message_id:
         type: string
-        example: "3EB06F9067F80BAB89FF"
+        example: "3EB0ABC123..."
+      starred:
+        type: boolean
+        description: "True to star, False to unstar"
+        example: true
+      from_me:
+        type: boolean
+        description: "True if the message being starred was sent by you"
+        example: false
+
+  ChatArchive:
+    type: object
+    required:
+      - phone
+      - archive
+    properties:
+      phone:
+        type: string
+        example: "5215555555555"
+      archive:
+        type: boolean
+        description: "True to archive, False to unarchive"
+        example: true
+
+
 
   MessageList:
     type: object
@@ -3149,6 +3320,53 @@ definitions:
             type: string
             example: "5491155553935@s.whatsapp.net"
 
+  
+  MessageProduct:
+    type: object
+    required:
+      - phone
+      - title
+      - price
+      - image_url
+    properties:
+      phone:
+        type: string
+        example: "5215555555555"
+      title:
+        type: string
+        description: "Product Name"
+        example: "Tennis Nike Air"
+      description:
+        type: string
+        description: "Product details"
+        example: "Talla 27, Color Blanco, Edición Limitada"
+      price:
+        type: number
+        format: float
+        description: "Price in standard format (e.g., 1500.50)"
+        example: 1500.50
+      currency:
+        type: string
+        description: "ISO 4217 Currency Code"
+        example: "MXN"
+      image_url:
+        type: string
+        description: "Public URL of the product image"
+        example: "https://example.com/tennis.jpg"
+      product_id:
+        type: string
+        description: "Your internal SKU or ID"
+        example: "SKU-9988"
+      url:
+        type: string
+        description: "Link to product on your website"
+        example: "https://myshop.com/product/9988"
+      id:
+        type: string
+        example: "3EB0..."
+      contextInfo:
+        $ref: "#/definitions/ContextInfo"
+  
   MessageText:
     type: object
     required:
