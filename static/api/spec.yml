@@ -1957,6 +1957,76 @@ paths:
                 example: { "code": 200, "data": { "Details": "Chat presence set successfuly" }, "success": true } 
   
   
+
+  /chat/pin:
+    post:
+      tags:
+        - Chat
+      summary: Pin/Unpin a Chat
+      description: Pins or unpins a chat to the top of the conversation list.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/ChatPin'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Chat pinned" }, "success": true }
+
+  /chat/star:
+    post:
+      tags:
+        - Chat
+      summary: Star/Unstar a Message
+      description: Stars (favorites) or unstars a specific message.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageStar'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Message starred" }, "success": true }
+                
+  /chat/archive:
+    post:
+      tags:
+        - Chat
+      summary: Archive/Unarchive a Chat
+      description: Moves a chat to the archive or brings it back.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/ChatArchive'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Chat archived" }, "success": true }
+
+
+
+
   /chat/history:
     get:
       tags:
@@ -3105,6 +3175,59 @@ definitions:
         example: "me:3EB06F9067F80BAB89FF"
 
   
+
+  ChatPin:
+    type: object
+    required:
+      - phone
+      - pinned
+    properties:
+      phone:
+        type: string
+        example: "5215555555555"
+      pinned:
+        type: boolean
+        description: "True to pin, False to unpin"
+        example: true
+
+  MessageStar:
+    type: object
+    required:
+      - phone
+      - message_id
+      - starred
+    properties:
+      phone:
+        type: string
+        example: "5215555555555"
+      message_id:
+        type: string
+        example: "3EB0ABC123..."
+      starred:
+        type: boolean
+        description: "True to star, False to unstar"
+        example: true
+      from_me:
+        type: boolean
+        description: "True if the message being starred was sent by you"
+        example: false
+
+  ChatArchive:
+    type: object
+    required:
+      - phone
+      - archive
+    properties:
+      phone:
+        type: string
+        example: "5215555555555"
+      archive:
+        type: boolean
+        description: "True to archive, False to unarchive"
+        example: true
+
+
+
   MessageList:
     type: object
     required:

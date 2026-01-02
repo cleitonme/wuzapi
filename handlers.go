@@ -5743,66 +5743,47 @@ func (s *server) RequestUnavailableMessage() http.HandlerFunc {
 }
 
 func (s *server) ArchiveChat() http.HandlerFunc {
-
 	type requestArchiveStruct struct {
-		Jid     string `json:"jid"`
+		Phone   string `json:"phone"`
 		Archive bool   `json:"archive"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
 		client := clientManager.GetWhatsmeowClient(txtid)
-
 		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		decoder := json.NewDecoder(r.Body)
-		var t requestArchiveStruct
-		err := decoder.Decode(&t)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+		var req requestArchiveStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
 			return
 		}
 
-		// Validate required fields
-		if t.Jid == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing jid in Payload"))
+		jid, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		chatJID, err := types.ParseJID(t.Jid)
+		err = client.SendAppState(context.Background(), appstate.BuildArchive(jid, req.Archive, time.Time{}, nil))
 		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("invalid Chat JID format"))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to archive chat: %v", err))
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		status := "unarchived"
+		if req.Archive {
+			status = "archived"
+		}
 
-		err = client.SendAppState(ctx, appstate.BuildArchive(chatJID, t.Archive, time.Time{}, nil))
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to archive chat: %s", err))
-			return
-		}
-		statusText := "Chat archived"
-		if !t.Archive {
-			statusText = "Chat unarchived"
-		}
-		response := map[string]interface{}{
-			"success": true,
-			"message": statusText,
-		}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
+		// Anti-Panic
+		response := map[string]interface{}{"Details": "Chat " + status, "Phone": req.Phone}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
-
 }
 
 // Downloads Sticker and returns base64 representation
@@ -6757,5 +6738,113 @@ func (s *server) fillContextInfo(msg *waE2E.Message, ctxInfo *waE2E.ContextInfo)
 
 	if ctxInfo.IsForwarded != nil && *ctxInfo.IsForwarded {
 		targetContext.IsForwarded = proto.Bool(true)
+	}
+}
+
+// Pins or Unpins a Chat
+func (s *server) PinChat() http.HandlerFunc {
+	type pinReq struct {
+		Phone  string `json:"phone"`
+		Pinned bool   `json:"pinned"` // true = fijar, false = desfijar
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req pinReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		jid, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		err = client.SendAppState(context.Background(), appstate.BuildPin(jid, req.Pinned))
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to pin chat: %v", err))
+			return
+		}
+
+		status := "unpinned"
+		if req.Pinned {
+			status = "pinned"
+		}
+
+		// Anti-Panic
+		response := map[string]interface{}{"Details": "Chat " + status, "Phone": req.Phone}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
+
+// Star or Unstar a specific message
+func (s *server) StarMessage() http.HandlerFunc {
+	type starReq struct {
+		Phone     string `json:"phone"`
+		MessageID string `json:"message_id"`
+		Starred   bool   `json:"starred"` // true = estrella, false = quitar estrella
+		FromMe    bool   `json:"from_me"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req starReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.MessageID == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing message_id"))
+			return
+		}
+
+		chatJID, err := validateMessageFields(client, req.Phone, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		var senderJID types.JID
+		if req.FromMe {
+			if client.Store.ID == nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("client not logged in"))
+				return
+			}
+			senderJID = client.Store.ID.ToNonAD()
+		} else {
+			senderJID = chatJID
+		}
+
+		err = client.SendAppState(context.Background(), appstate.BuildStar(chatJID, senderJID, req.MessageID, req.FromMe, req.Starred))
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to star message: %v", err))
+			return
+		}
+
+		status := "unstarred"
+		if req.Starred {
+			status = "starred"
+		}
+
+		// Anti-Panic
+		response := map[string]interface{}{"Details": "Message " + status, "Id": req.MessageID}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
