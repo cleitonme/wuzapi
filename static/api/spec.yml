@@ -2027,6 +2027,31 @@ paths:
 
 
 
+
+  /chat/send/product:
+    post:
+      tags:
+        - Chat
+      summary: Send a Product Card
+      description: Sends a native e-commerce product message with image and price.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageProduct'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "Sent" }, "success": true }
+
+
+
   /chat/history:
     get:
       tags:
@@ -3295,6 +3320,53 @@ definitions:
             type: string
             example: "5491155553935@s.whatsapp.net"
 
+  
+  MessageProduct:
+    type: object
+    required:
+      - phone
+      - title
+      - price
+      - image_url
+    properties:
+      phone:
+        type: string
+        example: "5215555555555"
+      title:
+        type: string
+        description: "Product Name"
+        example: "Tennis Nike Air"
+      description:
+        type: string
+        description: "Product details"
+        example: "Talla 27, Color Blanco, Edición Limitada"
+      price:
+        type: number
+        format: float
+        description: "Price in standard format (e.g., 1500.50)"
+        example: 1500.50
+      currency:
+        type: string
+        description: "ISO 4217 Currency Code"
+        example: "MXN"
+      image_url:
+        type: string
+        description: "Public URL of the product image"
+        example: "https://example.com/tennis.jpg"
+      product_id:
+        type: string
+        description: "Your internal SKU or ID"
+        example: "SKU-9988"
+      url:
+        type: string
+        description: "Link to product on your website"
+        example: "https://myshop.com/product/9988"
+      id:
+        type: string
+        example: "3EB0..."
+      contextInfo:
+        $ref: "#/definitions/ContextInfo"
+  
   MessageText:
     type: object
     required:

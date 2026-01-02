@@ -130,6 +130,8 @@ func (s *server) routes() {
 	s.router.Handle("/chat/pin", c.Then(s.PinChat())).Methods("POST")
 	s.router.Handle("/chat/star", c.Then(s.StarMessage())).Methods("POST")
 
+	s.router.Handle("/chat/send/product", c.Then(s.SendProduct())).Methods("POST")
+
 	s.router.Handle("/status/set/text", c.Then(s.SetStatusMessage())).Methods("POST")
 
 	s.router.Handle("/call/reject", c.Then(s.RejectCall())).Methods("POST")

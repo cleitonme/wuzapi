@@ -6848,3 +6848,119 @@ func (s *server) StarMessage() http.HandlerFunc {
 		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
+
+// SendProduct sends a Native E-commerce Product Card (Fixed types)
+func (s *server) SendProduct() http.HandlerFunc {
+
+	type productReq struct {
+		Phone       string            `json:"phone"`
+		Title       string            `json:"title"`
+		Description string            `json:"description"`
+		Currency    string            `json:"currency"`
+		Price       float64           `json:"price"`
+		ImageUrl    string            `json:"image_url"`
+		ProductId   string            `json:"product_id"`
+		RetailerId  string            `json:"retailer_id"`
+		Url         string            `json:"url"`
+		Id          string            `json:"id"`
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req productReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("bad payload"))
+			return
+		}
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
+			return
+		}
+		if req.ImageUrl == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing ImageUrl"))
+			return
+		}
+
+		filedata, mime, err := downloadMedia(req.ImageUrl)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("failed to download product image: %v", err))
+			return
+		}
+
+		uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("upload failed: %v", err))
+			return
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
+		}
+
+		price1000 := int64(req.Price * 1000)
+
+		prodID := req.ProductId
+		if prodID == "" {
+			prodID = "PROD-" + msgid
+		}
+
+		productMsg := &waE2E.ProductMessage{
+			Product: &waE2E.ProductMessage_ProductSnapshot{
+				ProductImage: &waE2E.ImageMessage{
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(mime),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(filedata))),
+				},
+				ProductID:         proto.String(prodID),
+				Title:             proto.String(req.Title),
+				Description:       proto.String(req.Description),
+				CurrencyCode:      proto.String(req.Currency),
+				PriceAmount1000:   proto.Int64(price1000),
+				RetailerID:        proto.String(req.RetailerId),
+				URL:               proto.String(req.Url),
+				ProductImageCount: proto.Uint32(1),
+			},
+			BusinessOwnerJID: proto.String(client.Store.ID.ToNonAD().String()),
+		}
+
+		msg := &waE2E.Message{
+			ProductMessage: productMsg,
+		}
+
+		s.fillContextInfo(msg, &req.ContextInfo)
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("send failed: %v", err))
+			return
+		}
+
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+		logContent := fmt.Sprintf("Product: %s ($%.2f %s)", req.Title, req.Price, req.Currency)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "product", logContent, "", historyLimit)
+
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
