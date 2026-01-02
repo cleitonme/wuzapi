@@ -1516,109 +1516,159 @@ func (s *server) SendContact() http.HandlerFunc {
 	}
 }
 
-// Sends location
+// Sends location message (Full Business Location with Address)
 func (s *server) SendLocation() http.HandlerFunc {
 
 	type locationStruct struct {
-		Phone       string
-		Id          string
-		Name        string
-		Latitude    float64
-		Longitude   float64
-		ContextInfo waE2E.ContextInfo
+		Phone       string            `json:"phone"`
+		Id          string            `json:"id"`
+		Name        string            `json:"name"`    // Ej: "Oficinas Centrales"
+		Address     string            `json:"address"` // Ej: "Av. Reforma 222, CDMX"
+		Latitude    float64           `json:"latitude"`
+		Longitude   float64           `json:"longitude"`
+		ContextInfo waE2E.ContextInfo `json:"contextInfo"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		decoder := json.NewDecoder(r.Body)
-		var t locationStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		var req locationStruct
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
-		if t.Latitude == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Latitude in Payload"))
-			return
-		}
-		if t.Longitude == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Longitude in Payload"))
+
+		if req.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone"))
 			return
 		}
 
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
+		if req.Latitude == 0 && req.Longitude == 0 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Latitude/Longitude"))
+			return
+		}
+
+		recipient, err := validateMessageFields(client, req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
-			log.Error().Msg(fmt.Sprintf("%s", err))
+			log.Error().Err(err).Msg("Error parsing Phone")
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return
 		}
 
-		if t.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = t.Id
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
 		}
 
-		msg := &waE2E.Message{LocationMessage: &waE2E.LocationMessage{
-			DegreesLatitude:  &t.Latitude,
-			DegreesLongitude: &t.Longitude,
-			Name:             &t.Name,
-		}}
-
-		if t.ContextInfo.StanzaID != nil {
-			msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.LocationMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+		locMsg := &waE2E.LocationMessage{
+			DegreesLatitude:  proto.Float64(req.Latitude),
+			DegreesLongitude: proto.Float64(req.Longitude),
 		}
 
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.LocationMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		if req.Name != "" {
+			locMsg.Name = proto.String(req.Name)
+		}
+		if req.Address != "" {
+			locMsg.Address = proto.String(req.Address)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		msg := &waE2E.Message{
+			LocationMessage: locMsg,
+		}
+
+		s.fillContextInfo(msg, &req.ContextInfo)
+
+		resp, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
-
 			return
 		}
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "location", t.Name, "", historyLimit)
+		logContent := fmt.Sprintf("Loc: %s (%f, %f)", req.Name, req.Latitude, req.Longitude)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "location", logContent, "", historyLimit)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		// Anti-Panic
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
+
+// Sends a Poll with selectable options control
+func (s *server) SendPoll() http.HandlerFunc {
+	type pollRequest struct {
+		Group         string   `json:"group"`          // Phone/Group JID
+		Header        string   `json:"header"`         // Question
+		Options       []string `json:"options"`        // Answers
+		MaxSelectable int      `json:"max_selectable"` // 1 = Single Choice, 0 = Allow Multiple
+		Id            string   `json:"id"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
 		}
+
+		var req pollRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
+			return
+		}
+
+		if req.Group == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Group/Phone"))
+			return
+		}
+		if req.Header == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Header (Question)"))
+			return
+		}
+		if len(req.Options) < 2 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("at least 2 options are required"))
+			return
+		}
+
+		msgid := req.Id
+		if msgid == "" {
+			msgid = client.GenerateMessageID()
+		}
+
+		recipient, err := validateMessageFields(client, req.Group, nil, nil)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		selectableCount := req.MaxSelectable
+		if selectableCount == 0 {
+			selectableCount = len(req.Options)
+		}
+
+		pollMessage := client.BuildPollCreation(req.Header, req.Options, selectableCount)
+
+		resp, err := client.SendMessage(context.Background(), recipient, pollMessage, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send poll: %v", err))
+			return
+		}
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Poll sent")
+
+		response := map[string]interface{}{"Details": "Poll sent successfully", "Id": msgid}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -1803,80 +1853,6 @@ func (s *server) SendMessage() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 
-	}
-}
-
-func (s *server) SendPoll() http.HandlerFunc {
-	type pollRequest struct {
-		Group   string   `json:"group"`   // The recipient's group id (120363313346913103@g.us)
-		Header  string   `json:"header"`  // The poll's headline text
-		Options []string `json:"options"` // The list of poll options
-		Id      string
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
-			return
-		}
-
-		msgid := ""
-		var resp whatsmeow.SendResponse
-
-		decoder := json.NewDecoder(r.Body)
-		var req pollRequest
-		err := decoder.Decode(&req)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
-			return
-		}
-
-		if req.Group == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Grouop in payload"))
-			return
-		}
-
-		if req.Header == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Header in payload"))
-			return
-		}
-
-		if len(req.Options) < 2 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("at least 2 options are required"))
-			return
-		}
-
-		if req.Id == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
-		} else {
-			msgid = req.Id
-		}
-
-		recipient, err := validateMessageFields(clientManager.GetWhatsmeowClient(txtid), req.Group, nil, nil)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, err)
-			return
-		}
-
-		pollMessage := clientManager.GetWhatsmeowClient(txtid).BuildPollCreation(req.Header, req.Options, 1)
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, pollMessage, whatsmeow.SendRequestExtra{ID: msgid})
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to send poll: %v", err))
-
-			return
-		}
-
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Poll sent")
-
-		response := map[string]interface{}{"Details": "Poll sent successfully", "Id": msgid}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
 	}
 }
 

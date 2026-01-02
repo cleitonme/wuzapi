@@ -1320,6 +1320,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/send/location:
     post:
       tags:
@@ -1342,6 +1344,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/send/contact:
     post:
       tags:
@@ -1817,6 +1821,8 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  
+  
   /chat/downloadimage:
     post:
       tags:
@@ -2977,7 +2983,7 @@ definitions:
         type: integer
         description: "Optional: Number of seconds to maintain the state before automatically sending 'paused'. Simulates human behavior."
         example: 3
-        
+
   
   StatusText:
     type: object
@@ -3028,20 +3034,59 @@ definitions:
       Phone:
         type: string
         example: "5491155553935"
+      Latitude:
+        type: number
+        format: float
+        example: 19.432608
+      Longitude:
+        type: number
+        format: float
+        example: -99.133209
       Name:
         type: string
-        example: Party
+        description: "Name of the place or business (Optional)"
+        example: "Wuzapi HQ"
+      Address:
+        type: string
+        description: "Address line to display below the name (Optional)"
+        example: "Av. Tecnológica 123, Ciudad de México"
       Id:
         type: string
         example: "ABCDABCD1234"
-      Latitude:
-        type: float
-        example: 48.858370
-      Longitude:
-        type: float
-        example: 2.294481
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+
+  MessagePoll:
+    type: object
+    required:
+      - Group
+      - Header
+      - Options
+    properties:
+      Group:
+        type: string
+        description: "Recipient JID (User or Group)"
+        example: "120363417042313103@g.us"
+      Header:
+        type: string
+        description: "The question of the poll"
+        example: "What is the best framework?"
+      Options:
+        type: array
+        description: "List of options (Minimum 2)"
+        items:
+          type: string
+        example: ["Go", "Node.js", "Python"]
+      max_selectable:
+        type: integer
+        description: "How many options can be selected? Set 1 for Single Choice. Leave 0 for Multiple Choice."
+        example: 1
+      Id:
+        type: string
+        example: "3EB06F9067F80BAB89FF"
+
+
+  
   ReactionText:
     type: object
     required: 
@@ -3059,29 +3104,7 @@ definitions:
         type: string
         example: "me:3EB06F9067F80BAB89FF"
 
-  MessagePoll:
-    type: object
-    required:
-      - Group
-      - Header
-      - Options
-    properties:
-      Group:
-        type: string
-        example: "120363417042313103@g.us"
-      Header:
-        type: string
-        example: "What's your favorite color"
-      Options:
-        type: array
-        description: An array of options for the poll.
-        items:
-          type: string
-          example: "Red"
-      Id:
-        type: string
-        example: "3EB06F9067F80BAB89FF"
-
+  
   MessageList:
     type: object
     required:
