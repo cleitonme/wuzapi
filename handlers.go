@@ -936,6 +936,11 @@ func (s *server) SendDocument() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "document", t.Caption, "", historyLimit)
 
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
 		responseJson, err := json.Marshal(response)
@@ -1088,6 +1093,11 @@ func (s *server) SendAudio() http.HandlerFunc {
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "audio", "", "", historyLimit)
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
@@ -1276,6 +1286,11 @@ func (s *server) SendImage() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "image", t.Caption, "", historyLimit)
 
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
 		responseJson, err := json.Marshal(response)
@@ -1411,6 +1426,11 @@ func (s *server) SendSticker() http.HandlerFunc {
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "sticker", "", "", historyLimit)
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
@@ -1568,6 +1588,11 @@ func (s *server) SendVideo() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "video", t.Caption, "", historyLimit)
 
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
 		responseJson, err := json.Marshal(response)
@@ -1671,6 +1696,11 @@ func (s *server) SendContact() http.HandlerFunc {
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "contact", t.Name, "", historyLimit)
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
@@ -1778,6 +1808,11 @@ func (s *server) SendLocation() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "location", t.Name, "", historyLimit)
 
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
 		responseJson, err := json.Marshal(response)
@@ -1872,15 +1907,21 @@ func (s *server) SendButtons() http.HandlerFunc {
 			Buttons:     buttons,
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, &waE2E.Message{ViewOnceMessage: &waE2E.FutureProofMessage{
+		msg := &waE2E.Message{ViewOnceMessage: &waE2E.FutureProofMessage{
 			Message: &waE2E.Message{
 				ButtonsMessage: msg2,
 			},
-		}}, whatsmeow.SendRequestExtra{ID: msgid})
+		}}
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
 		}
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
@@ -2029,6 +2070,11 @@ func (s *server) SendList() http.HandlerFunc {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
 		}
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message list sent")
 		response := map[string]interface{}{
@@ -2216,6 +2262,11 @@ func (s *server) SendMessage() http.HandlerFunc {
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "text", t.Body, "", historyLimit)
 
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
 		responseJson, err := json.Marshal(response)
@@ -2289,6 +2340,11 @@ func (s *server) SendPoll() http.HandlerFunc {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to send poll: %v", err)))
 			return
 		}
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, pollMessage, resp.Timestamp, "poll")
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Poll sent")
 
@@ -2719,6 +2775,11 @@ func (s *server) SendTemplate() http.HandlerFunc {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
 		}
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp.Unix())).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
@@ -6477,4 +6538,166 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		}
 		return
 	}
+}
+
+// Helper function to determine message type from waE2E.Message
+func (s *server) getMessageType(msg *waE2E.Message) string {
+	if msg.GetConversation() != "" {
+		return "text"
+	}
+	if msg.GetExtendedTextMessage() != nil {
+		return "text"
+	}
+	if msg.GetImageMessage() != nil {
+		return "image"
+	}
+	if msg.GetVideoMessage() != nil {
+		return "video"
+	}
+	if msg.GetAudioMessage() != nil {
+		return "audio"
+	}
+	if msg.GetDocumentMessage() != nil {
+		return "document"
+	}
+	if msg.GetStickerMessage() != nil {
+		return "sticker"
+	}
+	if msg.GetContactMessage() != nil {
+		return "contact"
+	}
+	if msg.GetLocationMessage() != nil {
+		return "location"
+	}
+	// Note: Poll messages are handled by BuildPollCreation and the type is determined from RawMessage
+	if msg.GetButtonsMessage() != nil || msg.GetButtonsResponseMessage() != nil {
+		return "buttons"
+	}
+	if msg.GetListMessage() != nil || msg.GetListResponseMessage() != nil {
+		return "list"
+	}
+	if msg.GetTemplateMessage() != nil {
+		return "template"
+	}
+	return "text"
+}
+
+// publishSentMessageEvent creates and publishes a Message event for sent messages to RabbitMQ
+// messageTypeOverride is optional - if provided, it will be used instead of auto-detecting the type
+func (s *server) publishSentMessageEvent(token, userID, txtid string, recipient types.JID, msgid string, msg *waE2E.Message, timestamp time.Time, messageTypeOverride ...string) {
+	// Get the client to access store info
+	client := clientManager.GetWhatsmeowClient(txtid)
+	if client == nil {
+		return
+	}
+
+	// Get sender JID (account owner) - use ToNonAD() to remove device ID, matching manual messages
+	var senderJID types.JID
+	if client.Store != nil && client.Store.ID != nil {
+		senderJID = client.Store.ID.ToNonAD()
+	}
+
+	// Determine if it's a group
+	isGroup := recipient.Server == types.GroupServer || recipient.Server == types.BroadcastServer
+
+	// Determine message type
+	messageType := s.getMessageType(msg)
+	if len(messageTypeOverride) > 0 && messageTypeOverride[0] != "" {
+		messageType = messageTypeOverride[0]
+	}
+
+	// Get LIDs for SenderAlt and RecipientAlt (matching manual message format)
+	var senderLID types.JID
+	var recipientLID types.JID
+	if client.Store != nil && client.Store.LIDs != nil {
+		ctx := context.Background()
+		
+		// Get sender LID
+		if !senderJID.IsEmpty() {
+			if lid, err := client.Store.LIDs.GetLIDForPN(ctx, senderJID); err == nil && !lid.IsEmpty() {
+				senderLID = lid
+			}
+		}
+		
+		// Get recipient LID (only for non-group chats)
+		if !isGroup && !recipient.IsEmpty() {
+			if lid, err := client.Store.LIDs.GetLIDForPN(ctx, recipient); err == nil && !lid.IsEmpty() {
+				recipientLID = lid
+			}
+		}
+	}
+
+	// Create MessageInfo structure
+	messageInfo := types.MessageInfo{
+		MessageSource: types.MessageSource{
+			Chat:     recipient,
+			Sender:   senderJID,
+			IsFromMe: true,
+			IsGroup:  isGroup,
+		},
+		ID:        msgid,
+		Timestamp: timestamp,
+		Type:      messageType,
+	}
+
+	// Set SenderAlt and RecipientAlt (LIDs)
+	if !senderLID.IsEmpty() {
+		messageInfo.SenderAlt = senderLID
+	}
+	if !recipientLID.IsEmpty() {
+		messageInfo.RecipientAlt = recipientLID
+	}
+
+	// Set DeviceSentMeta (matching manual message format)
+	messageInfo.DeviceSentMeta = &types.DeviceSentMeta{
+		DestinationJID: recipient.String(),
+		Phash:          "",
+	}
+
+	// Get push name from store
+	if client.Store != nil && client.Store.PushName != "" {
+		messageInfo.PushName = client.Store.PushName
+	}
+
+	// Wrap message in DeviceSentMessage structure for RawMessage (matching manual message format)
+	rawMessage := &waE2E.Message{
+		DeviceSentMessage: &waE2E.DeviceSentMessage{
+			DestinationJID: proto.String(recipient.String()),
+			Message:        msg,
+		},
+	}
+
+	// Create the event structure matching whatsmeow's events.Message
+	messageEvent := map[string]interface{}{
+		"Info":                  messageInfo,
+		"Message":               msg,
+		"IsEphemeral":           false,
+		"IsViewOnce":            false,
+		"IsViewOnceV2":          false,
+		"IsViewOnceV2Extension": false,
+		"IsDocumentWithCaption": false,
+		"IsLottieSticker":       false,
+		"IsBotInvoke":           false,
+		"IsEdit":                false,
+		"SourceWebMsg":          nil,
+		"UnavailableRequestID":  "",
+		"RetryCount":            0,
+		"NewsletterMeta":        nil,
+		"RawMessage":            rawMessage,
+	}
+
+	// Create the postmap structure that matches what sendEventWithWebHook expects
+	postmap := make(map[string]interface{})
+	postmap["type"] = "Message"
+	postmap["event"] = messageEvent
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(postmap)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal sent message event to JSON")
+		return
+	}
+
+	// Publish directly to RabbitMQ (bypassing subscription check for sent messages)
+	go sendToGlobalRabbit(jsonData, token, userID)
 }
