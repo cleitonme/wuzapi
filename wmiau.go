@@ -808,8 +808,15 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				s3Config.MediaDelivery = "base64"
 			}
 		} else {
-			s3Config.Enabled = myuserinfo.(Values).Get("S3Enabled")
-			s3Config.MediaDelivery = myuserinfo.(Values).Get("MediaDelivery")
+			// Adicionar verificação de tipo segura
+			if values, ok := myuserinfo.(Values); ok {
+				s3Config.Enabled = values.Get("S3Enabled")
+				s3Config.MediaDelivery = values.Get("MediaDelivery")
+			} else {
+				log.Warn().Msg("Invalid type in userinfocache, using defaults")
+				s3Config.Enabled = "false"
+				s3Config.MediaDelivery = "base64"
+			}
 		}
 
 		postmap["type"] = "Message"
