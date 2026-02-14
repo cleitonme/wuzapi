@@ -89,17 +89,12 @@ func sendToUserWebHookWithHmac(webhookurl string, path string, jsonData []byte, 
 		if path == "" {
 			go callHookWithHmac(webhookurl, data, userID, encryptedHmacKey)
 		} else {
-			// Create a channel to capture the error from the goroutine
-			errChan := make(chan error, 1)
+			// Chamar em background para não bloquear o handler
 			go func() {
-				err := callHookFileWithHmac(webhookurl, data, userID, path, encryptedHmacKey)
-				errChan <- err
+				if err := callHookFileWithHmac(webhookurl, data, userID, path, encryptedHmacKey); err != nil {
+					log.Error().Err(err).Msg("Error calling hook file")
+				}
 			}()
-
-			// Optionally handle the error from the channel (if needed)
-			if err := <-errChan; err != nil {
-				log.Error().Err(err).Msg("Error calling hook file")
-			}
 		}
 	} else {
 		log.Warn().Str("userid", userID).Msg("No webhook set for user")
