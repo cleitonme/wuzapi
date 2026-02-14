@@ -56,8 +56,11 @@ func (m *S3Manager) SetDB(db *sqlx.DB) {
 	m.db = db
 }
 
-// tryLazyInitFromDB attempts to load S3 config from DB and initialize client. Returns true if successful.
-func (m *S3Manager) tryLazyInitFromDB(userID string) bool {
+// EnsureClientFromDB loads S3 config from DB and initializes client if enabled. Returns true if client is available.
+func (m *S3Manager) EnsureClientFromDB(userID string) bool {
+	if _, _, ok := m.GetClient(userID); ok {
+		return true
+	}
 	m.mu.RLock()
 	db := m.db
 	m.mu.RUnlock()
@@ -242,7 +245,7 @@ func (m *S3Manager) UploadToS3(ctx context.Context, userID string, key string, d
 	client, config, ok := m.GetClient(userID)
 	if !ok {
 		// Try lazy init from DB if available (handles reconnect-after-restart)
-		if m.tryLazyInitFromDB(userID) {
+		if m.EnsureClientFromDB(userID) {
 			client, config, ok = m.GetClient(userID)
 		}
 		if !ok {

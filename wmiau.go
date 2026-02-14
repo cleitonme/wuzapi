@@ -44,40 +44,8 @@ type MyClient struct {
 }
 
 // ensureS3ClientForUser loads S3 config from DB and initializes client if not already present (lazy init for reconnect-after-restart)
-func ensureS3ClientForUser(db *sqlx.DB, userID string) {
-	if _, _, ok := GetS3Manager().GetClient(userID); ok {
-		return
-	}
-	var s3DbConfig struct {
-		Enabled       bool   `db:"s3_enabled"`
-		Endpoint      string `db:"s3_endpoint"`
-		Region        string `db:"s3_region"`
-		Bucket        string `db:"s3_bucket"`
-		AccessKey     string `db:"s3_access_key"`
-		SecretKey     string `db:"s3_secret_key"`
-		PathStyle     bool   `db:"s3_path_style"`
-		PublicURL     string `db:"s3_public_url"`
-		MediaDelivery string `db:"media_delivery"`
-		RetentionDays int    `db:"s3_retention_days"`
-	}
-	query := `SELECT s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key, s3_secret_key, s3_path_style, s3_public_url, COALESCE(media_delivery, 'base64') AS media_delivery, COALESCE(s3_retention_days, 30) AS s3_retention_days FROM users WHERE id = $1`
-	query = db.Rebind(query)
-	if err := db.Get(&s3DbConfig, query, userID); err != nil || !s3DbConfig.Enabled {
-		return
-	}
-	config := &S3Config{
-		Enabled:       s3DbConfig.Enabled,
-		Endpoint:      s3DbConfig.Endpoint,
-		Region:        s3DbConfig.Region,
-		Bucket:        s3DbConfig.Bucket,
-		AccessKey:     s3DbConfig.AccessKey,
-		SecretKey:     s3DbConfig.SecretKey,
-		PathStyle:     s3DbConfig.PathStyle,
-		PublicURL:     s3DbConfig.PublicURL,
-		MediaDelivery: s3DbConfig.MediaDelivery,
-		RetentionDays: s3DbConfig.RetentionDays,
-	}
-	_ = GetS3Manager().InitializeS3Client(userID, config)
+func ensureS3ClientForUser(userID string) {
+	GetS3Manager().EnsureClientFromDB(userID)
 }
 
 func sendToGlobalWebHook(jsonData []byte, token string, userID string) {
@@ -332,49 +300,7 @@ func (s *server) connectOnStartup() {
 
 			// Initialize S3 client if configured
 			go func(userID string) {
-				var s3Config struct {
-					Enabled       bool   `db:"s3_enabled"`
-					Endpoint      string `db:"s3_endpoint"`
-					Region        string `db:"s3_region"`
-					Bucket        string `db:"s3_bucket"`
-					AccessKey     string `db:"s3_access_key"`
-					SecretKey     string `db:"s3_secret_key"`
-					PathStyle     bool   `db:"s3_path_style"`
-					PublicURL     string `db:"s3_public_url"`
-					RetentionDays int    `db:"s3_retention_days"`
-				}
-
-				err := s.db.Get(&s3Config, `
-					SELECT s3_enabled, s3_endpoint, s3_region, s3_bucket, 
-						   s3_access_key, s3_secret_key, s3_path_style, 
-						   s3_public_url, s3_retention_days
-					FROM users WHERE id = $1`, userID)
-
-				if err != nil {
-					log.Error().Err(err).Str("userID", userID).Msg("Failed to get S3 config")
-					return
-				}
-
-				if s3Config.Enabled {
-					config := &S3Config{
-						Enabled:       s3Config.Enabled,
-						Endpoint:      s3Config.Endpoint,
-						Region:        s3Config.Region,
-						Bucket:        s3Config.Bucket,
-						AccessKey:     s3Config.AccessKey,
-						SecretKey:     s3Config.SecretKey,
-						PathStyle:     s3Config.PathStyle,
-						PublicURL:     s3Config.PublicURL,
-						RetentionDays: s3Config.RetentionDays,
-					}
-
-					err = GetS3Manager().InitializeS3Client(userID, config)
-					if err != nil {
-						log.Error().Err(err).Str("userID", userID).Msg("Failed to initialize S3 client on startup")
-					} else {
-						log.Info().Str("userID", userID).Msg("S3 client initialized on startup")
-					}
-				}
+				GetS3Manager().EnsureClientFromDB(userID)
 			}(txtid)
 		}
 	}
@@ -499,37 +425,7 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 	clientManager.SetHTTPClient(userID, httpClient)
 
 	// Initialize S3 client if configured (needed when user reconnects after container restart - connectOnStartup only runs for connected=1)
-	var s3DbConfig struct {
-		Enabled       bool   `db:"s3_enabled"`
-		Endpoint      string `db:"s3_endpoint"`
-		Region        string `db:"s3_region"`
-		Bucket        string `db:"s3_bucket"`
-		AccessKey     string `db:"s3_access_key"`
-		SecretKey     string `db:"s3_secret_key"`
-		PathStyle     bool   `db:"s3_path_style"`
-		PublicURL     string `db:"s3_public_url"`
-		MediaDelivery string `db:"media_delivery"`
-		RetentionDays int    `db:"s3_retention_days"`
-	}
-	if err := s.db.Get(&s3DbConfig, `SELECT s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key, s3_secret_key, s3_path_style, s3_public_url, COALESCE(media_delivery, 'base64'), COALESCE(s3_retention_days, 30) FROM users WHERE id = $1`, userID); err == nil && s3DbConfig.Enabled {
-		config := &S3Config{
-			Enabled:       s3DbConfig.Enabled,
-			Endpoint:      s3DbConfig.Endpoint,
-			Region:        s3DbConfig.Region,
-			Bucket:        s3DbConfig.Bucket,
-			AccessKey:     s3DbConfig.AccessKey,
-			SecretKey:     s3DbConfig.SecretKey,
-			PathStyle:     s3DbConfig.PathStyle,
-			PublicURL:     s3DbConfig.PublicURL,
-			MediaDelivery: s3DbConfig.MediaDelivery,
-			RetentionDays: s3DbConfig.RetentionDays,
-		}
-		if initErr := GetS3Manager().InitializeS3Client(userID, config); initErr != nil {
-			log.Error().Err(initErr).Str("userID", userID).Msg("Failed to initialize S3 client on connect")
-		} else {
-			log.Info().Str("userID", userID).Msg("S3 client initialized on connect")
-		}
-	}
+	GetS3Manager().EnsureClientFromDB(userID)
 
 	if client.Store.ID == nil {
 		// No ID stored, new login
@@ -889,7 +785,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		// Lazy init S3 client if needed (handles reconnect-after-restart when connectOnStartup skipped this user)
 		if s3Config.Enabled == "true" && (s3Config.MediaDelivery == "s3" || s3Config.MediaDelivery == "both") {
-			ensureS3ClientForUser(mycli.db, txtid)
+			ensureS3ClientForUser(txtid)
 		}
 
 		postmap["type"] = "Message"
@@ -942,7 +838,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 				// Process S3 upload if enabled
 				if s3Config.Enabled == "true" && (s3Config.MediaDelivery == "s3" || s3Config.MediaDelivery == "both") {
-					ensureS3ClientForUser(mycli.db, txtid)
+					ensureS3ClientForUser(txtid)
 					// Get sender JID for inbox/outbox determination
 					isIncoming := evt.Info.IsFromMe == false
 					contactJID := evt.Info.Sender.String()
@@ -1031,7 +927,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 				// Process S3 upload if enabled
 				if s3Config.Enabled == "true" && (s3Config.MediaDelivery == "s3" || s3Config.MediaDelivery == "both") {
-					ensureS3ClientForUser(mycli.db, txtid)
+					ensureS3ClientForUser(txtid)
 					// Get sender JID for inbox/outbox determination
 					isIncoming := evt.Info.IsFromMe == false
 					contactJID := evt.Info.Sender.String()
@@ -1125,7 +1021,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 				// Process S3 upload if enabled
 				if s3Config.Enabled == "true" && (s3Config.MediaDelivery == "s3" || s3Config.MediaDelivery == "both") {
-					ensureS3ClientForUser(mycli.db, txtid)
+					ensureS3ClientForUser(txtid)
 					// Get sender JID for inbox/outbox determination
 					isIncoming := evt.Info.IsFromMe == false
 					contactJID := evt.Info.Sender.String()
@@ -1208,7 +1104,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 				// Process S3 upload if enabled
 				if s3Config.Enabled == "true" && (s3Config.MediaDelivery == "s3" || s3Config.MediaDelivery == "both") {
-					ensureS3ClientForUser(mycli.db, txtid)
+					ensureS3ClientForUser(txtid)
 					// Get sender JID for inbox/outbox determination
 					isIncoming := evt.Info.IsFromMe == false
 					contactJID := evt.Info.Sender.String()
@@ -1291,7 +1187,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 				// if using S3 (same stream as other media)
 				if s3Config.Enabled == "true" && (s3Config.MediaDelivery == "s3" || s3Config.MediaDelivery == "both") {
-					ensureS3ClientForUser(mycli.db, txtid)
+					ensureS3ClientForUser(txtid)
 					isIncoming := evt.Info.IsFromMe == false
 					contactJID := evt.Info.Sender.String()
 					if evt.Info.IsGroup {
