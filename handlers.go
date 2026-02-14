@@ -154,15 +154,16 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		if !found {
 			log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,name,webhook,jid,events,proxy_url,qrcode,history,hmac_key IS NOT NULL AND length(hmac_key) > 0 FROM users WHERE token=$1 LIMIT 1", token)
+			rows, err := s.db.Query("SELECT id,name,webhook,jid,events,proxy_url,qrcode,history,hmac_key IS NOT NULL AND length(hmac_key) > 0,CASE WHEN s3_enabled THEN 'true' ELSE 'false' END,COALESCE(media_delivery, 'base64') FROM users WHERE token=$1 LIMIT 1", token)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			defer rows.Close()
 			var history sql.NullInt64
+			var s3Enabled, mediaDelivery string
 			for rows.Next() {
-				err = rows.Scan(&txtid, &name, &webhook, &jid, &events, &proxy_url, &qrcode, &history, &hasHmac)
+				err = rows.Scan(&txtid, &name, &webhook, &jid, &events, &proxy_url, &qrcode, &history, &hasHmac, &s3Enabled, &mediaDelivery)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, err)
 					return
@@ -176,16 +177,18 @@ func (s *server) authalice(next http.Handler) http.Handler {
 				log.Debug().Str("userId", txtid).Bool("historyValid", history.Valid).Int64("historyValue", history.Int64).Str("historyStr", historyStr).Msg("User authentication - history debug")
 
 				v := Values{map[string]string{
-					"Id":      txtid,
-					"Name":    name,
-					"Jid":     jid,
-					"Webhook": webhook,
-					"Token":   token,
-					"Proxy":   proxy_url,
-					"Events":  events,
-					"Qrcode":  qrcode,
-					"History": historyStr,
-					"HasHmac": strconv.FormatBool(hasHmac),
+					"Id":            txtid,
+					"Name":          name,
+					"Jid":           jid,
+					"Webhook":       webhook,
+					"Token":         token,
+					"Proxy":         proxy_url,
+					"Events":        events,
+					"Qrcode":        qrcode,
+					"History":       historyStr,
+					"HasHmac":       strconv.FormatBool(hasHmac),
+					"S3Enabled":     s3Enabled,
+					"MediaDelivery": mediaDelivery,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -810,13 +813,13 @@ func (s *server) GetStatus() http.HandlerFunc {
 func (s *server) SendDocument() http.HandlerFunc {
 
 	type documentStruct struct {
-		Caption     string
-		Phone       string
-		Document    string
-		FileName    string
-		Id          string
-		MimeType    string
-		ContextInfo waE2E.ContextInfo
+		Caption       string
+		Phone         string
+		Document      string
+		FileName      string
+		Id            string
+		MimeType      string
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -965,15 +968,15 @@ func (s *server) SendDocument() http.HandlerFunc {
 func (s *server) SendAudio() http.HandlerFunc {
 
 	type audioStruct struct {
-		Phone       string
-		Audio       string
-		Caption     string
-		Id          string
-		PTT         *bool  `json:"ptt,omitempty"`
-		MimeType    string `json:"mimetype,omitempty"`
-		Seconds     uint32
-		Waveform    []byte
-		ContextInfo waE2E.ContextInfo
+		Phone         string
+		Audio         string
+		Caption       string
+		Id            string
+		PTT           *bool  `json:"ptt,omitempty"`
+		MimeType      string `json:"mimetype,omitempty"`
+		Seconds       uint32
+		Waveform      []byte
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -1647,11 +1650,11 @@ func (s *server) SendVideo() http.HandlerFunc {
 func (s *server) SendContact() http.HandlerFunc {
 
 	type contactStruct struct {
-		Phone       string
-		Id          string
-		Name        string
-		Vcard       string
-		ContextInfo waE2E.ContextInfo
+		Phone         string
+		Id            string
+		Name          string
+		Vcard         string
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -1764,12 +1767,12 @@ func (s *server) SendContact() http.HandlerFunc {
 func (s *server) SendLocation() http.HandlerFunc {
 
 	type locationStruct struct {
-		Phone       string
-		Id          string
-		Name        string
-		Latitude    float64
-		Longitude   float64
-		ContextInfo waE2E.ContextInfo
+		Phone         string
+		Id            string
+		Name          string
+		Latitude      float64
+		Longitude     float64
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -1881,18 +1884,18 @@ func (s *server) SendLocation() http.HandlerFunc {
 
 // Sends Buttons
 func (s *server) SendButtons() http.HandlerFunc {
-    type PixPaymentStruct struct {
-        MerchantName string `json:"MerchantName"`
-        Key          string `json:"Key"`
-        KeyType      string `json:"KeyType"` // PHONE || EMAIL || CPF || EVP
-    }
+	type PixPaymentStruct struct {
+		MerchantName string `json:"MerchantName"`
+		Key          string `json:"Key"`
+		KeyType      string `json:"KeyType"` // PHONE || EMAIL || CPF || EVP
+	}
 	type buttonStruct struct {
-		ButtonId   string `json:"ButtonId"`
-		ButtonText string `json:"ButtonText"`
-		ButtonUrl  string `json:"ButtonUrl,omitempty"`
-		ButtonCopy string `json:"ButtonCopy,omitempty"`
+		ButtonId   string            `json:"ButtonId"`
+		ButtonText string            `json:"ButtonText"`
+		ButtonUrl  string            `json:"ButtonUrl,omitempty"`
+		ButtonCopy string            `json:"ButtonCopy,omitempty"`
 		PixPayment *PixPaymentStruct `json:"PixPayment,omitempty"`
-    }
+	}
 	type textStruct struct {
 		Phone   string         `json:"Phone"`
 		Title   string         `json:"Title"`
@@ -2007,7 +2010,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 					Name:             proto.String("cta_call"),
 					ButtonParamsJSON: proto.String(string(buttonParamsJSON)),
 				})
-            } else if item.ButtonUrl != "" {
+			} else if item.ButtonUrl != "" {
 				buttonParamsJSON, err := json.Marshal(map[string]string{
 					"display_text": item.ButtonText,
 					"url":          item.ButtonUrl,
@@ -2263,8 +2266,6 @@ func (s *server) SendList() http.HandlerFunc {
 	}
 }
 
-
-
 // Sends a status text message
 func (s *server) SetStatusMessage() http.HandlerFunc {
 
@@ -2326,8 +2327,8 @@ func (s *server) SendMessage() http.HandlerFunc {
 		LinkPreview   bool
 		Id            string
 		ContextInfo   waE2E.ContextInfo
-		QuotedText    string          `json:"QuotedText,omitempty"`
-		QuotedMessage *waE2E.Message  `json:"QuotedMessage,omitempty"`
+		QuotedText    string         `json:"QuotedText,omitempty"`
+		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
