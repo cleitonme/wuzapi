@@ -434,6 +434,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ADICIONE AQUI - Inicializar o cache ANTES de criar o server
+	log.Info().Msg("🚀 Initializing media cache system")
+	InitMediaCache()
+
+	// Start cache cleanup goroutine
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		log.Info().Msg("✅ Cache cleanup routine started (runs every 1 hour)")
+
+		for range ticker.C {
+			mediaCache.ClearExpired()
+			stats := mediaCache.GetStats()
+			log.Info().
+				Int("cached_media", stats["cached_media"].(int)).
+				Int("cached_groups", stats["cached_groups"].(int)).
+				Uint64("media_hits", stats["media_hits"].(uint64)).
+				Uint64("media_misses", stats["media_misses"].(uint64)).
+				Uint64("group_hits", stats["group_hits"].(uint64)).
+				Uint64("group_misses", stats["group_misses"].(uint64)).
+				Float64("media_hit_rate", stats["media_hit_rate"].(float64)).
+				Float64("group_hit_rate", stats["group_hit_rate"].(float64)).
+				Msg("📊 Cache statistics")
+		}
+	}()
+
 	serverMode := HTTP
 	if *mode == "stdio" {
 		serverMode = Stdio

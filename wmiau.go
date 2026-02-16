@@ -1766,6 +1766,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postmap["type"] = "GroupInfo"
 		dowebhook = 1
 		log.Info().Str("jid", evt.JID.String()).Msg("Group info updated")
+		mediaCache.InvalidateGroupCache(evt.JID)
 	case *events.JoinedGroup:
 		postmap["type"] = "JoinedGroup"
 		dowebhook = 1

@@ -881,7 +881,12 @@ func (s *server) SendDocument() http.HandlerFunc {
 				return
 			} else {
 				filedata = dataURL.Data
-				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaDocument)
+				uploaded, err = mediaCache.GetOrUploadDocument(context.Background(), clientManager.GetWhatsmeowClient(txtid), filedata, func() string {
+					if t.MimeType != "" {
+						return t.MimeType
+					}
+					return http.DetectContentType(filedata)
+				}())
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 					return
@@ -942,7 +947,13 @@ func (s *server) SendDocument() http.HandlerFunc {
 			msg.DocumentMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		ctx := context.Background()
+		if recipient.Server == types.GroupServer {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+		}
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(ctx, recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1022,34 +1033,13 @@ func (s *server) SendAudio() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		var uploaded whatsmeow.UploadResponse
-		var filedata []byte
-
-		if strings.HasPrefix(t.Audio, "data:audio/") {
-			var dataURL, err = dataurl.DecodeString(t.Audio)
-			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
-				return
-			} else {
-				filedata = dataURL.Data
-				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaAudio)
-				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
-					return
-				}
-			}
-		} else {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("audio data should start with \"data:audio/\""))
-			return
-		}
-
 		// Configure PTT (Push to Talk) - default is true, setting it to false is a breaking change
 		ptt := true
 		if t.PTT != nil {
 			ptt = *t.PTT
 		}
 
-		// Configure MIME type
+		// Configure MIME type ANTES de usar
 		var mime string
 		if t.MimeType != "" {
 			mime = t.MimeType
@@ -1060,6 +1050,27 @@ func (s *server) SendAudio() http.HandlerFunc {
 			} else {
 				mime = "audio/mpeg"
 			}
+		}
+
+		var uploaded whatsmeow.UploadResponse
+		var filedata []byte
+
+		if strings.HasPrefix(t.Audio, "data:audio/") {
+			var dataURL, err = dataurl.DecodeString(t.Audio)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
+				return
+			} else {
+				filedata = dataURL.Data
+				uploaded, err = mediaCache.GetOrUploadAudio(context.Background(), clientManager.GetWhatsmeowClient(txtid), filedata, mime)
+				if err != nil {
+					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
+					return
+				}
+			}
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("audio data should start with \"data:audio/\""))
+			return
 		}
 
 		msg := &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
@@ -1108,7 +1119,13 @@ func (s *server) SendAudio() http.HandlerFunc {
 			msg.AudioMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		ctx := context.Background()
+		if recipient.Server == types.GroupServer {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+		}
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(ctx, recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1219,7 +1236,12 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		uploaded, err = mediaCache.GetOrUploadImage(context.Background(), clientManager.GetWhatsmeowClient(txtid), filedata, func() string {
+			if t.MimeType != "" {
+				return t.MimeType
+			}
+			return http.DetectContentType(filedata)
+		}())
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
@@ -1306,7 +1328,14 @@ func (s *server) SendImage() http.HandlerFunc {
 			msg.ImageMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		ctx := context.Background()
+		if recipient.Server == types.GroupServer {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+		}
+
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(ctx, recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1568,7 +1597,12 @@ func (s *server) SendVideo() http.HandlerFunc {
 			return
 		}
 
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaVideo)
+		uploaded, err = mediaCache.GetOrUploadVideo(context.Background(), clientManager.GetWhatsmeowClient(txtid), filedata, func() string {
+			if t.MimeType != "" {
+				return t.MimeType
+			}
+			return http.DetectContentType(filedata)
+		}())
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
@@ -1624,7 +1658,13 @@ func (s *server) SendVideo() http.HandlerFunc {
 			msg.VideoMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		ctx := context.Background()
+		if recipient.Server == types.GroupServer {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+		}
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(ctx, recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
@@ -2388,11 +2428,9 @@ func (s *server) SendMessage() http.HandlerFunc {
 		if t.ContextInfo.StanzaID != nil {
 			var qm *waE2E.Message
 
-			// If QuotedMessage was provided, use it.
 			if t.QuotedMessage != nil {
 				qm = t.QuotedMessage
 			} else {
-				// Otherwise, use the old logic with QuotedText.
 				qm = &waE2E.Message{}
 				if t.QuotedText != "" {
 					qm.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
@@ -2421,7 +2459,20 @@ func (s *server) SendMessage() http.HandlerFunc {
 			}
 			msg.ExtendedTextMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+
+		// OTIMIZAÇÃO: Use context com timeout maior para grupos
+		ctx := context.Background()
+		if recipient.Server == types.GroupServer {
+			var cancel context.CancelFunc
+			// 30 segundos para grupos grandes
+			ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
+			// Pre-cache group info antes do envio
+			go mediaCache.GetGroupInfoCached(ctx, clientManager.GetWhatsmeowClient(txtid), recipient)
+		}
+
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(ctx, recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
