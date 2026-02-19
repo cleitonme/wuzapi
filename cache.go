@@ -5,11 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
+)
+
+const (
+	mediaTTL = 5 * time.Minute
+	groupTTL = 24 * time.Hour
 )
 
 // CachedImage stores uploaded image data for reuse
@@ -31,7 +37,7 @@ type MediaCache struct {
 	images sync.Map // map[string]*CachedImage
 	groups sync.Map // map[string]*CachedGroupInfo
 
-	// Statistics
+	// Statistics (atomic for thread safety)
 	imageHits   uint64
 	imageMisses uint64
 	groupHits   uint64
@@ -45,148 +51,83 @@ func InitMediaCache() {
 	if mediaCache == nil {
 		mediaCache = &MediaCache{}
 		log.Info().Msg("✅ Media cache initialized")
+
+		// Start background cleanup goroutine
+		go mediaCache.startCleanupWorker()
 	}
+}
+
+// startCleanupWorker runs periodic cleanup of expired entries
+func (mc *MediaCache) startCleanupWorker() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		mc.ClearExpired()
+	}
+}
+
+// uploadMedia is a generic upload helper to avoid code duplication
+func (mc *MediaCache) uploadMedia(
+	ctx context.Context,
+	client *whatsmeow.Client,
+	filedata []byte,
+	mimeType string,
+	mediaType whatsmeow.MediaType,
+	label string,
+) (whatsmeow.UploadResponse, error) {
+	cacheKey := hashBytes(filedata)
+
+	log.Info().Str("cacheKey", cacheKey).Int("fileSize", len(filedata)).Str("type", label).Msg("🔍 Checking media cache")
+
+	if cached, ok := mc.images.Load(cacheKey); ok {
+		cachedMedia := cached.(*CachedImage)
+		if time.Now().Before(cachedMedia.ExpiresAt) {
+			hits := atomic.AddUint64(&mc.imageHits, 1)
+			log.Info().Str("cacheKey", cacheKey).Str("type", label).Uint64("totalHits", hits).Msg("✅ CACHE HIT - Using cached media upload")
+			return cachedMedia.Upload, nil
+		}
+		log.Info().Str("cacheKey", cacheKey).Str("type", label).Msg("⏰ Cache expired, removing")
+		mc.images.Delete(cacheKey)
+	}
+
+	misses := atomic.AddUint64(&mc.imageMisses, 1)
+	log.Info().Str("cacheKey", cacheKey).Str("type", label).Uint64("totalMisses", misses).Msg("❌ CACHE MISS - Uploading new media")
+
+	uploaded, err := client.Upload(ctx, filedata, mediaType)
+	if err != nil {
+		return whatsmeow.UploadResponse{}, err
+	}
+
+	expiresAt := time.Now().Add(mediaTTL)
+	mc.images.Store(cacheKey, &CachedImage{
+		Upload:    uploaded,
+		MimeType:  mimeType,
+		ExpiresAt: expiresAt,
+	})
+
+	log.Info().Str("cacheKey", cacheKey).Str("type", label).Time("expiresAt", expiresAt).Msg("💾 Cached media upload")
+
+	return uploaded, nil
 }
 
 // GetOrUploadImage checks cache first, uploads if not found
 func (mc *MediaCache) GetOrUploadImage(ctx context.Context, client *whatsmeow.Client, filedata []byte, mimeType string) (whatsmeow.UploadResponse, error) {
-	cacheKey := hashBytes(filedata)
-
-	log.Info().Str("cacheKey", cacheKey).Int("fileSize", len(filedata)).Msg("🔍 Checking image cache")
-
-	if cached, ok := mc.images.Load(cacheKey); ok {
-		cachedImg := cached.(*CachedImage)
-		if time.Now().Before(cachedImg.ExpiresAt) {
-			mc.imageHits++
-			log.Info().Str("cacheKey", cacheKey).Uint64("totalHits", mc.imageHits).Msg("✅ CACHE HIT - Using cached image upload")
-			return cachedImg.Upload, nil
-		}
-		log.Info().Str("cacheKey", cacheKey).Msg("⏰ Cache expired, removing")
-		mc.images.Delete(cacheKey)
-	}
-
-	mc.imageMisses++
-	log.Info().Str("cacheKey", cacheKey).Uint64("totalMisses", mc.imageMisses).Msg("❌ CACHE MISS - Uploading new image")
-	uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaImage)
-	if err != nil {
-		return whatsmeow.UploadResponse{}, err
-	}
-
-	expiresAt := time.Now().Add(24 * time.Hour)
-	mc.images.Store(cacheKey, &CachedImage{
-		Upload:    uploaded,
-		MimeType:  mimeType,
-		ExpiresAt: expiresAt,
-	})
-
-	log.Info().Str("cacheKey", cacheKey).Time("expiresAt", expiresAt).Msg("💾 Cached image upload")
-
-	return uploaded, nil
+	return mc.uploadMedia(ctx, client, filedata, mimeType, whatsmeow.MediaImage, "image")
 }
 
-// GetOrUploadDocument similar to image but for documents
+// GetOrUploadDocument checks cache first, uploads if not found
 func (mc *MediaCache) GetOrUploadDocument(ctx context.Context, client *whatsmeow.Client, filedata []byte, mimeType string) (whatsmeow.UploadResponse, error) {
-	cacheKey := hashBytes(filedata)
-
-	log.Info().Str("cacheKey", cacheKey).Int("fileSize", len(filedata)).Msg("🔍 Checking document cache")
-
-	if cached, ok := mc.images.Load(cacheKey); ok {
-		cachedDoc := cached.(*CachedImage)
-		if time.Now().Before(cachedDoc.ExpiresAt) {
-			mc.imageHits++
-			log.Info().Str("cacheKey", cacheKey).Uint64("totalHits", mc.imageHits).Msg("✅ CACHE HIT - Using cached document upload")
-			return cachedDoc.Upload, nil
-		}
-		mc.images.Delete(cacheKey)
-	}
-
-	mc.imageMisses++
-	log.Info().Str("cacheKey", cacheKey).Uint64("totalMisses", mc.imageMisses).Msg("❌ CACHE MISS - Uploading new document")
-	uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaDocument)
-	if err != nil {
-		return whatsmeow.UploadResponse{}, err
-	}
-
-	expiresAt := time.Now().Add(24 * time.Hour)
-	mc.images.Store(cacheKey, &CachedImage{
-		Upload:    uploaded,
-		MimeType:  mimeType,
-		ExpiresAt: expiresAt,
-	})
-
-	log.Info().Str("cacheKey", cacheKey).Time("expiresAt", expiresAt).Msg("💾 Cached document upload")
-
-	return uploaded, nil
+	return mc.uploadMedia(ctx, client, filedata, mimeType, whatsmeow.MediaDocument, "document")
 }
 
-// GetOrUploadVideo similar to image but for videos
+// GetOrUploadVideo checks cache first, uploads if not found
 func (mc *MediaCache) GetOrUploadVideo(ctx context.Context, client *whatsmeow.Client, filedata []byte, mimeType string) (whatsmeow.UploadResponse, error) {
-	cacheKey := hashBytes(filedata)
-
-	log.Info().Str("cacheKey", cacheKey).Int("fileSize", len(filedata)).Msg("🔍 Checking video cache")
-
-	if cached, ok := mc.images.Load(cacheKey); ok {
-		cachedVid := cached.(*CachedImage)
-		if time.Now().Before(cachedVid.ExpiresAt) {
-			mc.imageHits++
-			log.Info().Str("cacheKey", cacheKey).Uint64("totalHits", mc.imageHits).Msg("✅ CACHE HIT - Using cached video upload")
-			return cachedVid.Upload, nil
-		}
-		mc.images.Delete(cacheKey)
-	}
-
-	mc.imageMisses++
-	log.Info().Str("cacheKey", cacheKey).Uint64("totalMisses", mc.imageMisses).Msg("❌ CACHE MISS - Uploading new video")
-	uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaVideo)
-	if err != nil {
-		return whatsmeow.UploadResponse{}, err
-	}
-
-	expiresAt := time.Now().Add(24 * time.Hour)
-	mc.images.Store(cacheKey, &CachedImage{
-		Upload:    uploaded,
-		MimeType:  mimeType,
-		ExpiresAt: expiresAt,
-	})
-
-	log.Info().Str("cacheKey", cacheKey).Time("expiresAt", expiresAt).Msg("💾 Cached video upload")
-
-	return uploaded, nil
+	return mc.uploadMedia(ctx, client, filedata, mimeType, whatsmeow.MediaVideo, "video")
 }
 
-// GetOrUploadAudio similar to image but for audio
+// GetOrUploadAudio checks cache first, uploads if not found
 func (mc *MediaCache) GetOrUploadAudio(ctx context.Context, client *whatsmeow.Client, filedata []byte, mimeType string) (whatsmeow.UploadResponse, error) {
-	cacheKey := hashBytes(filedata)
-
-	log.Info().Str("cacheKey", cacheKey).Int("fileSize", len(filedata)).Msg("🔍 Checking audio cache")
-
-	if cached, ok := mc.images.Load(cacheKey); ok {
-		cachedAudio := cached.(*CachedImage)
-		if time.Now().Before(cachedAudio.ExpiresAt) {
-			mc.imageHits++
-			log.Info().Str("cacheKey", cacheKey).Uint64("totalHits", mc.imageHits).Msg("✅ CACHE HIT - Using cached audio upload")
-			return cachedAudio.Upload, nil
-		}
-		mc.images.Delete(cacheKey)
-	}
-
-	mc.imageMisses++
-	log.Info().Str("cacheKey", cacheKey).Uint64("totalMisses", mc.imageMisses).Msg("❌ CACHE MISS - Uploading new audio")
-	uploaded, err := client.Upload(ctx, filedata, whatsmeow.MediaAudio)
-	if err != nil {
-		return whatsmeow.UploadResponse{}, err
-	}
-
-	expiresAt := time.Now().Add(24 * time.Hour)
-	mc.images.Store(cacheKey, &CachedImage{
-		Upload:    uploaded,
-		MimeType:  mimeType,
-		ExpiresAt: expiresAt,
-	})
-
-	log.Info().Str("cacheKey", cacheKey).Time("expiresAt", expiresAt).Msg("💾 Cached audio upload")
-
-	return uploaded, nil
+	return mc.uploadMedia(ctx, client, filedata, mimeType, whatsmeow.MediaAudio, "audio")
 }
 
 // GetGroupInfoCached returns cached group info or fetches if not available
@@ -198,23 +139,24 @@ func (mc *MediaCache) GetGroupInfoCached(ctx context.Context, client *whatsmeow.
 	if cached, ok := mc.groups.Load(cacheKey); ok {
 		cachedGroup := cached.(*CachedGroupInfo)
 		if time.Now().Before(cachedGroup.ExpiresAt) {
-			mc.groupHits++
+			hits := atomic.AddUint64(&mc.groupHits, 1)
 			participantCount := len(cachedGroup.Info.Participants)
-			log.Info().Str("groupJID", cacheKey).Int("participants", participantCount).Uint64("totalHits", mc.groupHits).Msg("✅ CACHE HIT - Using cached group info")
+			log.Info().Str("groupJID", cacheKey).Int("participants", participantCount).Uint64("totalHits", hits).Msg("✅ CACHE HIT - Using cached group info")
 			return cachedGroup.Info, nil
 		}
 		log.Info().Str("groupJID", cacheKey).Msg("⏰ Cache expired, removing")
 		mc.groups.Delete(cacheKey)
 	}
 
-	mc.groupMisses++
-	log.Info().Str("groupJID", cacheKey).Uint64("totalMisses", mc.groupMisses).Msg("❌ CACHE MISS - Fetching group info from server")
+	misses := atomic.AddUint64(&mc.groupMisses, 1)
+	log.Info().Str("groupJID", cacheKey).Uint64("totalMisses", misses).Msg("❌ CACHE MISS - Fetching group info from server")
+
 	info, err := client.GetGroupInfo(ctx, jid)
 	if err != nil {
 		return nil, err
 	}
 
-	expiresAt := time.Now().Add(5 * time.Minute)
+	expiresAt := time.Now().Add(groupTTL)
 	mc.groups.Store(cacheKey, &CachedGroupInfo{
 		Info:      info,
 		ExpiresAt: expiresAt,
@@ -229,7 +171,7 @@ func (mc *MediaCache) GetGroupInfoCached(ctx context.Context, client *whatsmeow.
 // InvalidateGroupCache removes group from cache
 func (mc *MediaCache) InvalidateGroupCache(jid types.JID) {
 	mc.groups.Delete(jid.String())
-	log.Info().Str("groupJID", jid.String()).Msg("Invalidated group cache")
+	log.Info().Str("groupJID", jid.String()).Msg("🗑️ Invalidated group cache")
 }
 
 // ClearExpired removes expired entries from cache
@@ -276,15 +218,20 @@ func (mc *MediaCache) GetStats() map[string]interface{} {
 		return true
 	})
 
+	imageHits := atomic.LoadUint64(&mc.imageHits)
+	imageMisses := atomic.LoadUint64(&mc.imageMisses)
+	groupHits := atomic.LoadUint64(&mc.groupHits)
+	groupMisses := atomic.LoadUint64(&mc.groupMisses)
+
 	return map[string]interface{}{
 		"cached_media":   imageCount,
 		"cached_groups":  groupCount,
-		"media_hits":     mc.imageHits,
-		"media_misses":   mc.imageMisses,
-		"group_hits":     mc.groupHits,
-		"group_misses":   mc.groupMisses,
-		"media_hit_rate": calculateHitRate(mc.imageHits, mc.imageMisses),
-		"group_hit_rate": calculateHitRate(mc.groupHits, mc.groupMisses),
+		"media_hits":     imageHits,
+		"media_misses":   imageMisses,
+		"group_hits":     groupHits,
+		"group_misses":   groupMisses,
+		"media_hit_rate": calculateHitRate(imageHits, imageMisses),
+		"group_hit_rate": calculateHitRate(groupHits, groupMisses),
 	}
 }
 
@@ -296,7 +243,7 @@ func calculateHitRate(hits, misses uint64) float64 {
 	return float64(hits) / float64(total) * 100
 }
 
-// Helper function to hash bytes for cache key
+// hashBytes hashes bytes for cache key
 func hashBytes(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
