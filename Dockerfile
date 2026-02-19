@@ -1,4 +1,4 @@
-FROM golang:1.25 AS builder
+FROM golang:1.25-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -22,7 +22,7 @@ ENV CGO_ENABLED=1
 RUN go mod tidy
 RUN go build -o wuzapi
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
