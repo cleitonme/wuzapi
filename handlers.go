@@ -5300,7 +5300,7 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 		}
 
 		// 6. Remove files from S3 (if enabled)
-		if err == nil && s3Enabled {
+		if s3Enabled {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			errS3 := GetS3Manager().DeleteAllUserObjects(ctx, id)
