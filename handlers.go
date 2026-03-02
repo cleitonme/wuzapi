@@ -154,15 +154,16 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		if !found {
 			log.Info().Msg("Looking for user information in DB")
 			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,name,webhook,jid,events,proxy_url,qrcode,history,hmac_key IS NOT NULL AND length(hmac_key) > 0 FROM users WHERE token=$1 LIMIT 1", token)
+			rows, err := s.db.Query("SELECT id,name,webhook,jid,events,proxy_url,qrcode,history,hmac_key IS NOT NULL AND length(hmac_key) > 0,CASE WHEN s3_enabled THEN 'true' ELSE 'false' END,COALESCE(media_delivery, 'base64') FROM users WHERE token=$1 LIMIT 1", token)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
 			defer rows.Close()
 			var history sql.NullInt64
+			var s3Enabled, mediaDelivery string
 			for rows.Next() {
-				err = rows.Scan(&txtid, &name, &webhook, &jid, &events, &proxy_url, &qrcode, &history, &hasHmac)
+				err = rows.Scan(&txtid, &name, &webhook, &jid, &events, &proxy_url, &qrcode, &history, &hasHmac, &s3Enabled, &mediaDelivery)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, err)
 					return
@@ -176,16 +177,18 @@ func (s *server) authalice(next http.Handler) http.Handler {
 				log.Debug().Str("userId", txtid).Bool("historyValid", history.Valid).Int64("historyValue", history.Int64).Str("historyStr", historyStr).Msg("User authentication - history debug")
 
 				v := Values{map[string]string{
-					"Id":      txtid,
-					"Name":    name,
-					"Jid":     jid,
-					"Webhook": webhook,
-					"Token":   token,
-					"Proxy":   proxy_url,
-					"Events":  events,
-					"Qrcode":  qrcode,
-					"History": historyStr,
-					"HasHmac": strconv.FormatBool(hasHmac),
+					"Id":             txtid,
+					"Name":           name,
+					"Jid":            jid,
+					"Webhook":        webhook,
+					"Token":          token,
+					"Proxy":          proxy_url,
+					"Events":         events,
+					"Qrcode":         qrcode,
+					"History":        historyStr,
+					"HasHmac":        strconv.FormatBool(hasHmac),
+					"S3Enabled":      s3Enabled,
+					"MediaDelivery":  mediaDelivery,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -5260,7 +5263,15 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			client.Disconnect()
 		}
 
-		// 2. Remove from DB
+		// 2. Query S3 config before deleting the user
+		var s3Enabled bool
+		err = s.db.QueryRow("SELECT s3_enabled FROM users WHERE id = $1", id).Scan(&s3Enabled)
+		if err != nil {
+			log.Error().Err(err).Str("id", id).Msg("problem retrieving user s3 configuration")
+			// Continue anyway since we have the ID to delete local files
+		}
+
+		// 3. Remove from DB
 		_, err = s.db.Exec("DELETE FROM users WHERE id = $1", id)
 		if err != nil {
 			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -5272,13 +5283,13 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			return
 		}
 
-		// 3. Cleanup from memory
+		// 4. Cleanup from memory
 		clientManager.DeleteWhatsmeowClient(id)
 		clientManager.DeleteMyClient(id)
 		clientManager.DeleteHTTPClient(id)
 		userinfocache.Delete(token)
 
-		// 4. Remove media files
+		// 5. Remove media files
 		userDirectory := filepath.Join(s.exPath, "files", id)
 		if stat, err := os.Stat(userDirectory); err == nil && stat.IsDir() {
 			log.Info().Str("dir", userDirectory).Msg("deleting media and history files from disk")
@@ -5288,9 +5299,7 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			}
 		}
 
-		// 5. Remove files from S3 (if enabled)
-		var s3Enabled bool
-		err = s.db.QueryRow("SELECT s3_enabled FROM users WHERE id = $1", id).Scan(&s3Enabled)
+		// 6. Remove files from S3 (if enabled)
 		if err == nil && s3Enabled {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
