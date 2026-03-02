@@ -39,7 +39,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: devlucasmoraes/wuzapi
+          images: asternic/wuzapi
           tags: |
             type=raw,value=latest
             type=sha,format=short
