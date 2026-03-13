@@ -80,7 +80,7 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.5"
+const version = "1.0.6"
 
 func newSafeHTTPClient() *http.Client {
 	return &http.Client{
@@ -382,6 +382,9 @@ func main() {
 			log.Error().Err(err).Msg("Failed to close database connection")
 		}
 	}()
+
+	// Set DB reference in S3Manager for lazy client initialization
+	GetS3Manager().SetDB(db)
 
 	// Initialize the schema
 	if err = initializeSchema(db); err != nil {
