@@ -70,6 +70,11 @@ var migrations = []Migration{
 		Name:  "add_data_json",
 		UpSQL: addDataJsonSQL,
 	},
+	{
+		ID:    9,
+		Name:  "add_whatsmeow_message_secrets_message_id_idx",
+		UpSQL: addWhatsmeowMessageSecretsMessageIDIndexSQL,
+	},
 }
 
 const changeIDToStringSQL = `
@@ -214,6 +219,13 @@ END $$;
 -- SQLite version (handled in code)
 `
 
+const addWhatsmeowMessageSecretsMessageIDIndexSQL = `
+CREATE INDEX CONCURRENTLY IF NOT EXISTS whatsmeow_message_secrets_message_id_idx
+ON public.whatsmeow_message_secrets (message_id);
+
+-- SQLite version (handled in code)
+`
+
 // GenerateRandomID creates a random string ID
 func GenerateRandomID() (string, error) {
 	bytes := make([]byte, 16) // 128 bits
@@ -256,13 +268,13 @@ func createMigrationsTable(db *sqlx.DB) error {
 	case "postgres":
 		err = db.Get(&tableExists, `
 			SELECT EXISTS (
-				SELECT 1 FROM information_schema.tables 
+				SELECT 1 FROM information_schema.tables
 				WHERE table_name = 'migrations'
 			)`)
 	case "sqlite":
 		err = db.Get(&tableExists, `
 			SELECT EXISTS (
-				SELECT 1 FROM sqlite_master 
+				SELECT 1 FROM sqlite_master
 				WHERE type='table' AND name='migrations'
 			)`)
 	default:
@@ -404,7 +416,7 @@ func applyMigration(db *sqlx.DB, migration Migration) error {
 			if err == nil {
 				// Create index for SQLite
 				_, err = tx.Exec(`
-					CREATE INDEX IF NOT EXISTS idx_message_history_user_chat_timestamp 
+					CREATE INDEX IF NOT EXISTS idx_message_history_user_chat_timestamp
 					ON message_history (user_id, chat_jid, timestamp DESC)`)
 			}
 			if err == nil {
@@ -435,6 +447,12 @@ func applyMigration(db *sqlx.DB, migration Migration) error {
 		} else {
 			_, err = tx.Exec(migration.UpSQL)
 		}
+	} else if migration.ID == 9 {
+		if db.DriverName() == "sqlite" {
+			err = nil
+		} else {
+			_, err = tx.Exec(migration.UpSQL)
+		}
 	} else {
 		_, err = tx.Exec(migration.UpSQL)
 	}
@@ -445,7 +463,7 @@ func applyMigration(db *sqlx.DB, migration Migration) error {
 
 	// Record the migration
 	if _, err = tx.Exec(`
-        INSERT INTO migrations (id, name) 
+        INSERT INTO migrations (id, name)
         VALUES ($1, $2)`, migration.ID, migration.Name); err != nil {
 		return fmt.Errorf("failed to record migration: %w", err)
 	}
@@ -593,7 +611,7 @@ func migrateSQLiteIDToString(tx *sqlx.Tx) error {
         SELECT
             hex(randomblob(16)),
             name, token, webhook, jid, qrcode,
-            connected, expiration, events, proxy_url 
+            connected, expiration, events, proxy_url
         FROM users`)
 	if err != nil {
 		return fmt.Errorf("failed to copy data: %w", err)
