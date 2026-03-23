@@ -410,6 +410,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// No main.go, após inicializar o whatsmeow:
+	if err := ensurePostStartupIndexes(db); err != nil {
+		log.Warn().Err(err).Msg("Failed to ensure post-startup indexes")
+	}
+
 	var dbLog waLog.Logger
 	if *waDebug != "" {
 		dbLog = waLog.Stdout("Database", *waDebug, *colorOutput)

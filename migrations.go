@@ -78,6 +78,9 @@ var migrations = []Migration{
 		// NoTransaction=true: CREATE INDEX não pode rodar dentro de
 		// uma transação no PostgreSQL quando usa certas formas DDL.
 		// Sem isso causa FATAL "cannot run inside a transaction block".
+		// O SQL usa IF EXISTS na tabela para tolerar instalações novas
+		// onde o whatsmeow ainda não criou suas tabelas. O índice será
+		// garantido por ensurePostStartupIndexes() após o whatsmeow iniciar.
 		ID:            9,
 		Name:          "add_whatsmeow_message_secrets_message_id_idx",
 		UpSQL:         addWhatsmeowMessageSecretsMessageIDIndexSQL,
@@ -234,11 +237,28 @@ END $$;
 -- SQLite version (handled in code)
 `
 
-// Removido CONCURRENTLY — IF NOT EXISTS já garante idempotência
-// e evita problemas em ambientes gerenciados (RDS, Cloud SQL, etc).
+// Migration 9: tolerante a instalações novas onde a tabela whatsmeow_message_secrets
+// ainda não existe (ela é criada pelo whatsmeow na primeira conexão).
+// Se a tabela não existir, o bloco passa silenciosamente e a migration é marcada
+// como aplicada. O índice será criado por ensurePostStartupIndexes() após o whatsmeow
+// ter inicializado suas tabelas.
 const addWhatsmeowMessageSecretsMessageIDIndexSQL = `
-CREATE INDEX IF NOT EXISTS whatsmeow_message_secrets_message_id_idx
-ON whatsmeow_message_secrets (message_id);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'whatsmeow_message_secrets'
+    ) THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'whatsmeow_message_secrets'
+              AND indexname = 'whatsmeow_message_secrets_message_id_idx'
+        ) THEN
+            CREATE INDEX whatsmeow_message_secrets_message_id_idx
+            ON whatsmeow_message_secrets (message_id);
+        END IF;
+    END IF;
+END $$;
 `
 
 const addPerformanceIndexesSQL = `
@@ -354,6 +374,49 @@ func initializeSchema(db *sqlx.DB) error {
 		}
 	}
 
+	return nil
+}
+
+// ensurePostStartupIndexes garante índices que dependem de tabelas criadas
+// pelo whatsmeow (ex: whatsmeow_message_secrets). Deve ser chamada no main.go
+// APÓS o whatsmeow ter inicializado suas tabelas (após store.New / device connect).
+// É idempotente e segura para chamar em toda inicialização.
+func ensurePostStartupIndexes(db *sqlx.DB) error {
+	if db.DriverName() != "postgres" {
+		// SQLite: cria índice simples sem CONCURRENTLY.
+		// Se a tabela não existir ainda, ignora silenciosamente.
+		_, err := db.Exec(`
+			CREATE INDEX IF NOT EXISTS whatsmeow_message_secrets_message_id_idx
+			ON whatsmeow_message_secrets (message_id)`)
+		if err != nil {
+			// Tabela ainda pode não existir — não é erro fatal
+			return nil
+		}
+		return nil
+	}
+
+	// PostgreSQL: usa DO $$ com IF EXISTS para ser idempotente e tolerante
+	_, err := db.Exec(`
+		DO $$
+		BEGIN
+		    IF EXISTS (
+		        SELECT 1 FROM information_schema.tables
+		        WHERE table_name = 'whatsmeow_message_secrets'
+		    ) THEN
+		        IF NOT EXISTS (
+		            SELECT 1 FROM pg_indexes
+		            WHERE tablename = 'whatsmeow_message_secrets'
+		              AND indexname = 'whatsmeow_message_secrets_message_id_idx'
+		        ) THEN
+		            CREATE INDEX whatsmeow_message_secrets_message_id_idx
+		            ON whatsmeow_message_secrets (message_id);
+		        END IF;
+		    END IF;
+		END $$;
+	`)
+	if err != nil {
+		return fmt.Errorf("ensurePostStartupIndexes: %w", err)
+	}
 	return nil
 }
 
@@ -575,12 +638,16 @@ func applyMigrationWithTx(db *sqlx.DB, migration Migration) error {
 			_, err = tx.Exec(migration.UpSQL)
 		}
 	} else if migration.ID == 9 {
-		// SQLite: cria índice simples (sem CONCURRENTLY)
-		// PostgreSQL: tratado em applyMigrationNoTx (NoTransaction=true)
+		// SQLite: tenta criar o índice; se a tabela não existir ainda, ignora.
+		// PostgreSQL: tratado em applyMigrationNoTx (NoTransaction=true).
 		if db.DriverName() == "sqlite" {
 			_, err = tx.Exec(`
 				CREATE INDEX IF NOT EXISTS whatsmeow_message_secrets_message_id_idx
 				ON whatsmeow_message_secrets (message_id)`)
+			if err != nil {
+				// Tabela ainda não existe — ignorar, será garantida por ensurePostStartupIndexes()
+				err = nil
+			}
 		}
 	} else if migration.ID == 10 {
 		// SQLite: cria índices sem INCLUDE (não suportado)
