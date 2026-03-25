@@ -2010,6 +2010,18 @@ definitions:
         example:
           ["5491155553935@s.whatsapp.net", "5491155553936@s.whatsapp.net"]
         description: "Array of JIDs to mention in the message. Use full WhatsApp JID format (number@s.whatsapp.net)."
+  QuotedMessageExtendedText:
+    type: object
+    properties:
+      text:
+        type: string
+        example: "Original message text"
+  QuotedMessage:
+    type: object
+    description: "Optional quoted message payload for custom reply preview using extendedTextMessage."
+    properties:
+      extendedTextMessage:
+        $ref: "#/definitions/QuotedMessageExtendedText"
   User:
     type: object
     properties:
@@ -2455,6 +2467,8 @@ definitions:
         type: string
         description: "Text content of the message being replied to (for displaying quote preview)"
         example: "Original message text"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageImage:
     type: object
     required: 
@@ -2475,6 +2489,8 @@ definitions:
         example: "ABCDABCD1234"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageAudio:
     type: object
     required:
