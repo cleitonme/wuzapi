@@ -420,11 +420,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err != nil {
-		log.Fatal().Err(err).Msg("Error initializing schema")
-		os.Exit(1)
-	}
-
 	serverMode := HTTP
 	if *mode == "stdio" {
 		serverMode = Stdio
