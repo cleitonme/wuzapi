@@ -2309,6 +2309,8 @@ definitions:
         example: "BEGIN:VCARD\nVERSION:3.0\nN:Doe;John;;;\nFN:John Doe\nORG:Example.com Inc.;\nTITLE:Imaginary test person\nEMAIL;type=INTERNET;type=WORK;type=pref:johnDoe@example.org\nTEL;type=WORK;type=pref:+1 617 555 1212\nTEL;type=WORK:+1 (617) 555-1234\nTEL;type=CELL:+1 781 555 1212\nTEL;type=HOME:+1 202 555 1212\nitem1.ADR;type=WORK:;;2 Enterprise Avenue;Worktown;NY;01111;USA\nitem1.X-ABADR:us\nitem2.ADR;type=HOME;type=pref:;;3 Acacia Avenue;Hoitem2.X-ABADR:us\nEND:VCARD"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
 
 
   MessageLocation:
@@ -2335,6 +2337,8 @@ definitions:
         example: 2.294481
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   ReactionText:
     type: object
     required: 
@@ -2524,6 +2528,8 @@ definitions:
         example: [0, 0, 0, 12, 20, 20, 22, 10, 5, 0, 0, 0]
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageVideo:
     type: object
     required: 
@@ -2547,6 +2553,8 @@ definitions:
         example: "AA00D010"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageSticker:
     type: object
     required: 
@@ -2585,6 +2593,8 @@ definitions:
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
         description: "Optional context info for replies, mentions, and forwarding"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageDocument:
     type: object
     required: 
@@ -2606,6 +2616,8 @@ definitions:
         example: "ABCDABCD1234"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageTemplate:
     type: object
     required: 
