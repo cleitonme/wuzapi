@@ -44,8 +44,12 @@ import (
 
 const (
 	openGraphFetchTimeout    = 5 * time.Second
-	openGraphPageMaxBytes    = 2 * 1024 * 1024  // 2MB
-	openGraphImageMaxBytes   = 10 * 1024 * 1024 // 10MB
+	openGraphPageMaxBytes    = 2 * 1024 * 1024   // 2MB
+	fetchImageMaxBytes       = 16 * 1024 * 1024  // 16MB
+	fetchVideoMaxBytes       = 100 * 1024 * 1024 // 100MB
+	fetchAudioMaxBytes       = 16 * 1024 * 1024  // 16MB
+	fetchDocumentMaxBytes    = 100 * 1024 * 1024 // 100MB
+	openGraphImageMaxBytes   = 10 * 1024 * 1024  // 10MB
 	openGraphThumbnailWidth  = 100
 	openGraphThumbnailHeight = 100
 	openGraphJpegQuality     = 80
@@ -152,13 +156,18 @@ func fetchURLBytes(ctx context.Context, resourceURL string, limit int64) ([]byte
 		return nil, "", fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 
-	lr := io.LimitReader(resp.Body, limit+1)
-	data, err := io.ReadAll(lr)
+	var data []byte
+	if limit <= 0 {
+		data, err = io.ReadAll(resp.Body)
+	} else {
+		lr := io.LimitReader(resp.Body, limit+1)
+		data, err = io.ReadAll(lr)
+		if err == nil && int64(len(data)) > limit {
+			return nil, "", fmt.Errorf("response exceeds allowed size (%d bytes)", limit)
+		}
+	}
 	if err != nil {
 		return nil, "", err
-	}
-	if int64(len(data)) > limit {
-		return nil, "", fmt.Errorf("response exceeds allowed size (%d bytes)", limit)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
