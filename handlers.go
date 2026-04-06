@@ -907,10 +907,6 @@ func (s *server) SendDocument() http.HandlerFunc {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
 		}
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
-			return
-		}
 
 		msg := &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
 			URL:        proto.String(uploaded.URL),
@@ -1048,7 +1044,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 
 		var uploaded whatsmeow.UploadResponse
 		var filedata []byte
-		var mime string
+		var detectedMime string
 
 		if strings.HasPrefix(t.Audio, "data:audio/") {
 
@@ -1059,7 +1055,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 			}
 
 			filedata = dataURL.Data
-			mime = dataURL.ContentType()
+			detectedMime = dataURL.ContentType()
 
 		} else if isHTTPURL(t.Audio) {
 
@@ -1070,29 +1066,12 @@ func (s *server) SendAudio() http.HandlerFunc {
 			}
 
 			filedata = data
-
-			if t.MimeType != "" {
-				mime = t.MimeType
-			} else if strings.HasPrefix(strings.ToLower(ct), "audio/") {
-				mime = ct
+			if strings.HasPrefix(strings.ToLower(ct), "audio/") {
+				detectedMime = ct
 			}
 
 		} else {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("audio must be base64 (data:audio/) or valid HTTP URL"))
-			return
-		}
-
-		if mime == "" {
-			if t.MimeType != "" {
-				mime = t.MimeType
-			} else {
-				mime = http.DetectContentType(filedata)
-			}
-		}
-
-		uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaAudio)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
 		}
 
@@ -1101,12 +1080,26 @@ func (s *server) SendAudio() http.HandlerFunc {
 			ptt = *t.PTT
 		}
 
-		if mime == "" {
+		var mime string
+		switch {
+		case t.MimeType != "":
+			mime = t.MimeType
+		case detectedMime != "":
+			mime = detectedMime
+		case http.DetectContentType(filedata) != "application/octet-stream":
+			mime = http.DetectContentType(filedata)
+		default:
 			if ptt {
 				mime = "audio/ogg; codecs=opus"
 			} else {
 				mime = "audio/mpeg"
 			}
+		}
+
+		uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaAudio)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
+			return
 		}
 
 		msg := &waE2E.Message{
