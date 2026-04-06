@@ -1627,7 +1627,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 		} else if isHTTPURL(t.Video) {
 			data, ct, err := fetchURLBytes(r.Context(), t.Video, fetchVideoMaxBytes)
 			if err != nil {
-				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("failed to fetch image from url: %v", err)))
+				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("failed to fetch video from url: %v", err)))
 				return
 			}
 			mimeType := ct
