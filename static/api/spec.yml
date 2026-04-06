@@ -2010,6 +2010,18 @@ definitions:
         example:
           ["5491155553935@s.whatsapp.net", "5491155553936@s.whatsapp.net"]
         description: "Array of JIDs to mention in the message. Use full WhatsApp JID format (number@s.whatsapp.net)."
+  QuotedMessageExtendedText:
+    type: object
+    properties:
+      text:
+        type: string
+        example: "Original message text"
+  QuotedMessage:
+    type: object
+    description: "Optional quoted message payload for custom reply preview using extendedTextMessage."
+    properties:
+      extendedTextMessage:
+        $ref: "#/definitions/QuotedMessageExtendedText"
   User:
     type: object
     properties:
@@ -2297,6 +2309,8 @@ definitions:
         example: "BEGIN:VCARD\nVERSION:3.0\nN:Doe;John;;;\nFN:John Doe\nORG:Example.com Inc.;\nTITLE:Imaginary test person\nEMAIL;type=INTERNET;type=WORK;type=pref:johnDoe@example.org\nTEL;type=WORK;type=pref:+1 617 555 1212\nTEL;type=WORK:+1 (617) 555-1234\nTEL;type=CELL:+1 781 555 1212\nTEL;type=HOME:+1 202 555 1212\nitem1.ADR;type=WORK:;;2 Enterprise Avenue;Worktown;NY;01111;USA\nitem1.X-ABADR:us\nitem2.ADR;type=HOME;type=pref:;;3 Acacia Avenue;Hoitem2.X-ABADR:us\nEND:VCARD"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
 
 
   MessageLocation:
@@ -2323,6 +2337,8 @@ definitions:
         example: 2.294481
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   ReactionText:
     type: object
     required: 
@@ -2455,6 +2471,8 @@ definitions:
         type: string
         description: "Text content of the message being replied to (for displaying quote preview)"
         example: "Original message text"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageImage:
     type: object
     required: 
@@ -2475,6 +2493,8 @@ definitions:
         example: "ABCDABCD1234"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageAudio:
     type: object
     required:
@@ -2508,6 +2528,8 @@ definitions:
         example: [0, 0, 0, 12, 20, 20, 22, 10, 5, 0, 0, 0]
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageVideo:
     type: object
     required: 
@@ -2531,6 +2553,8 @@ definitions:
         example: "AA00D010"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageSticker:
     type: object
     required: 
@@ -2569,6 +2593,8 @@ definitions:
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
         description: "Optional context info for replies, mentions, and forwarding"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageDocument:
     type: object
     required: 
@@ -2590,6 +2616,8 @@ definitions:
         example: "ABCDABCD1234"
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageTemplate:
     type: object
     required: 
