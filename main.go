@@ -176,7 +176,7 @@ func main() {
 
 	err := godotenv.Load()
 	if err != nil {
-		log.Warn().Err(err).Msg("It was not possible to load the .env file (it may not exist).")
+		// log.Warn().Err(err).Msg("It was not possible to load the .env file (it may not exist).")
 	}
 
 	flag.Parse()
