@@ -662,7 +662,8 @@ func (s *server) Logout() http.HandlerFunc {
 func (s *server) PairPhone() http.HandlerFunc {
 
 	type pairStruct struct {
-		Phone string
+		Phone       string
+		PairingCode string // opcional, usa "QWERTYUI" se vazio
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -694,7 +695,19 @@ func (s *server) PairPhone() http.HandlerFunc {
 			return
 		}
 
-		linkingCode, err := clientManager.GetWhatsmeowClient(txtid).PairPhone(context.Background(), t.Phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+		pairingCode := t.PairingCode
+		if pairingCode == "" {
+			pairingCode = "QWERTYUI"
+		}
+
+		linkingCode, err := clientManager.GetWhatsmeowClient(txtid).PairPhone(
+			context.Background(),
+			t.Phone,
+			true,
+			whatsmeow.PairClientChrome,
+			"Chrome (Linux)",
+			pairingCode,
+		)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
