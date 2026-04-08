@@ -52,6 +52,7 @@ var (
 	logLevel            = flag.String("loglevel", "error", "Log level (debug, info, warn, error)")
 	skipMedia           = flag.Bool("skipmedia", true, "Do not attempt to download media in messages")
 	osName              = flag.String("osname", "Mac OS 10", "Connection OSName in Whatsapp")
+	platformType        = flag.String("platformtype", "DESKTOP", "Device platform type (DESKTOP, IPAD, ANDROID_TABLET, IOS_PHONE, ANDROID_PHONE, etc.)")
 	colorOutput         = flag.Bool("color", true, "Enable colored output for console logs")
 	sslcert             = flag.String("sslcertificate", "", "SSL Certificate File")
 	sslprivkey          = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
@@ -248,6 +249,11 @@ func main() {
 		*osName = v
 	}
 
+	// Override platformType from environment variable if set
+	if v := os.Getenv("SESSION_PLATFORM_TYPE"); v != "" {
+		*platformType = v
+	}
+
 	if *versionFlag {
 		fmt.Printf("WuzAPI version %s\n", version)
 		os.Exit(0)
@@ -420,7 +426,7 @@ func main() {
 		)
 		container, err = sqlstore.New(context.Background(), "postgres", storeConnStr, dbLog)
 	} else {
-		storeConnStr = "file:" + filepath.Join(config.Path, "main.db") + "?_pragma=foreign_keys(1)&_busy_timeout=3000"
+		storeConnStr = "file:" + filepath.ToSlash(filepath.Join(config.Path, "main.db")) + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_timeout=10000"
 		container, err = sqlstore.New(context.Background(), "sqlite", storeConnStr, dbLog)
 	}
 
