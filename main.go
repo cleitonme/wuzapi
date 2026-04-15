@@ -74,14 +74,14 @@ var (
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
 	killchannel      = make(map[string](chan bool))
-	userinfocache    = cache.New(5*time.Minute, 10*time.Minute)
+	userinfocache    = cache.New(cache.NoExpiration, 30*time.Minute)
 	lastMessageCache = cache.New(24*time.Hour, 24*time.Hour)
 	globalHTTPClient = newSafeHTTPClient()
 )
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.9"
+const version = "1.0.10"
 
 func newSafeHTTPClient() *http.Client {
 	return &http.Client{
