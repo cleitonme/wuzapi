@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ const (
 type CachedImage struct {
 	Upload    whatsmeow.UploadResponse
 	MimeType  string
+	HashFull  string
 	Thumbnail []byte
 	ExpiresAt time.Time
 }
@@ -75,23 +77,55 @@ func (mc *MediaCache) uploadMedia(
 	mediaType whatsmeow.MediaType,
 	label string,
 ) (whatsmeow.UploadResponse, error) {
-	cacheKey := hashBytes(filedata)
 
-	log.Info().Str("cacheKey", cacheKey).Int("fileSize", len(filedata)).Str("type", label).Msg("🔍 Checking media cache")
+	quickKey := quickHash(filedata)
 
-	if cached, ok := mc.images.Load(cacheKey); ok {
+	log.Info().
+		Str("quickKey", quickKey).
+		Int("fileSize", len(filedata)).
+		Str("type", label).
+		Msg("🔍 Checking media cache")
+
+	// 🔎 tenta cache pelo quick hash
+	if cached, ok := mc.images.Load(quickKey); ok {
 		cachedMedia := cached.(*CachedImage)
+
 		if time.Now().Before(cachedMedia.ExpiresAt) {
-			hits := atomic.AddUint64(&mc.imageHits, 1)
-			log.Info().Str("cacheKey", cacheKey).Str("type", label).Uint64("totalHits", hits).Msg("✅ CACHE HIT - Using cached media upload")
-			return cachedMedia.Upload, nil
+
+			// 🔒 valida com hash completo (evita colisão falsa)
+			fullHash := hashBytes(filedata)
+
+			if cachedMedia.HashFull == fullHash {
+				hits := atomic.AddUint64(&mc.imageHits, 1)
+
+				log.Info().
+					Str("quickKey", quickKey).
+					Str("type", label).
+					Uint64("totalHits", hits).
+					Msg("✅ CACHE HIT")
+
+				return cachedMedia.Upload, nil
+			}
+
+			log.Warn().
+				Str("quickKey", quickKey).
+				Msg("⚠️ Hash collision detected, ignoring cache")
 		}
-		log.Info().Str("cacheKey", cacheKey).Str("type", label).Msg("⏰ Cache expired, removing")
-		mc.images.Delete(cacheKey)
+
+		mc.images.Delete(quickKey)
 	}
 
+	// ❌ cache miss
 	misses := atomic.AddUint64(&mc.imageMisses, 1)
-	log.Info().Str("cacheKey", cacheKey).Str("type", label).Uint64("totalMisses", misses).Msg("❌ CACHE MISS - Uploading new media")
+
+	log.Info().
+		Str("quickKey", quickKey).
+		Str("type", label).
+		Uint64("totalMisses", misses).
+		Msg("❌ CACHE MISS")
+
+	// 🔥 só aqui calcula SHA256 completo
+	fullHash := hashBytes(filedata)
 
 	uploaded, err := client.Upload(ctx, filedata, mediaType)
 	if err != nil {
@@ -99,13 +133,18 @@ func (mc *MediaCache) uploadMedia(
 	}
 
 	expiresAt := time.Now().Add(mediaTTL)
-	mc.images.Store(cacheKey, &CachedImage{
+
+	mc.images.Store(quickKey, &CachedImage{
 		Upload:    uploaded,
 		MimeType:  mimeType,
+		HashFull:  fullHash,
 		ExpiresAt: expiresAt,
 	})
 
-	log.Info().Str("cacheKey", cacheKey).Str("type", label).Time("expiresAt", expiresAt).Msg("💾 Cached media upload")
+	log.Info().
+		Str("quickKey", quickKey).
+		Time("expiresAt", expiresAt).
+		Msg("💾 Cached media upload")
 
 	return uploaded, nil
 }
@@ -247,4 +286,27 @@ func calculateHitRate(hits, misses uint64) float64 {
 func hashBytes(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
+}
+
+func quickHash(data []byte) string {
+	h := sha256.New()
+
+	size := len(data)
+
+	// primeiros 256 bytes
+	if size > 256 {
+		h.Write(data[:256])
+	} else {
+		h.Write(data)
+	}
+
+	// tamanho do arquivo (importante!)
+	_ = binary.Write(h, binary.LittleEndian, int64(size))
+
+	// últimos 256 bytes (se existir)
+	if size > 256 {
+		h.Write(data[size-256:])
+	}
+
+	return hex.EncodeToString(h.Sum(nil))
 }
