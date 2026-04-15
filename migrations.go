@@ -93,6 +93,25 @@ var migrations = []Migration{
 		UpSQL:         addPerformanceIndexesSQL,
 		NoTransaction: true,
 	},
+	{
+		ID:            11,
+		Name:          "add_last_message_index",
+		NoTransaction: true,
+		UpSQL: `
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'message_history'
+              AND indexname = 'idx_message_history_last_msg'
+        ) THEN
+            CREATE INDEX idx_message_history_last_msg
+            ON message_history (user_id, chat_jid, timestamp DESC)
+            INCLUDE (message_id, sender_jid);
+        END IF;
+    END $$;
+    `,
+	},
 }
 
 const changeIDToStringSQL = `
@@ -654,6 +673,13 @@ func applyMigrationWithTx(db *sqlx.DB, migration Migration) error {
 		// PostgreSQL: tratado em applyMigrationNoTx (NoTransaction=true)
 		if db.DriverName() == "sqlite" {
 			err = applyPerformanceIndexesSQLite(tx)
+		}
+	} else if migration.ID == 11 {
+		if db.DriverName() == "sqlite" {
+			_, err = tx.Exec(`
+                CREATE INDEX IF NOT EXISTS idx_message_history_last_msg
+                ON message_history (user_id, chat_jid, timestamp DESC)
+            `)
 		}
 	} else {
 		_, err = tx.Exec(migration.UpSQL)
