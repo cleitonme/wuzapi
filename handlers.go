@@ -140,71 +140,118 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		webhook := ""
 		jid := ""
 		events := ""
-		proxy_url := ""
+		proxyURL := ""
 		qrcode := ""
-		var hasHmac bool // ← Nova variável para status HMAC
 
-		// Get token from headers or uri parameters
+		var hasHmac bool
+		var history sql.NullInt64
+		var s3Enabled, mediaDelivery string
+
+		// Get token
 		token := r.Header.Get("token")
 		if token == "" {
 			token = strings.Join(r.URL.Query()["token"], "")
 		}
 
+		// 🔥 tenta cache primeiro
 		myuserinfo, found := userinfocache.Get(token)
 		if !found {
+
 			log.Info().Msg("Looking for user information in DB")
-			// Checks DB from matching user and store user values in context
-			rows, err := s.db.Query("SELECT id,name,webhook,jid,events,proxy_url,qrcode,history,hmac_key IS NOT NULL AND length(hmac_key) > 0,CASE WHEN s3_enabled THEN 'true' ELSE 'false' END,COALESCE(media_delivery, 'base64') FROM users WHERE token=$1 LIMIT 1", token)
+
+			// 🔥 QueryRow (sem loop)
+			err := s.db.QueryRow(`
+				SELECT
+					id,
+					name,
+					webhook,
+					jid,
+					events,
+					proxy_url,
+					qrcode,
+					history,
+					(hmac_key IS NOT NULL AND length(hmac_key) > 0),
+					CASE WHEN s3_enabled THEN 'true' ELSE 'false' END,
+					COALESCE(media_delivery, 'base64')
+				FROM users
+				WHERE token=$1
+				LIMIT 1
+			`, token).Scan(
+				&txtid,
+				&name,
+				&webhook,
+				&jid,
+				&events,
+				&proxyURL,
+				&qrcode,
+				&history,
+				&hasHmac,
+				&s3Enabled,
+				&mediaDelivery,
+			)
+
+			if err == sql.ErrNoRows {
+				s.Respond(w, r, http.StatusUnauthorized, errors.New("unauthorized"))
+				return
+			}
+
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
-			defer rows.Close()
-			var history sql.NullInt64
-			var s3Enabled, mediaDelivery string
-			for rows.Next() {
-				err = rows.Scan(&txtid, &name, &webhook, &jid, &events, &proxy_url, &qrcode, &history, &hasHmac, &s3Enabled, &mediaDelivery)
-				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, err)
-					return
-				}
-				historyStr := "0"
-				if history.Valid {
-					historyStr = fmt.Sprintf("%d", history.Int64)
-				}
 
-				// Debug logging for history value
-				log.Debug().Str("userId", txtid).Bool("historyValid", history.Valid).Int64("historyValue", history.Int64).Str("historyStr", historyStr).Msg("User authentication - history debug")
-
-				v := Values{map[string]string{
-					"Id":            txtid,
-					"Name":          name,
-					"Jid":           jid,
-					"Webhook":       webhook,
-					"Token":         token,
-					"Proxy":         proxy_url,
-					"Events":        events,
-					"Qrcode":        qrcode,
-					"History":       historyStr,
-					"HasHmac":       strconv.FormatBool(hasHmac),
-					"S3Enabled":     s3Enabled,
-					"MediaDelivery": mediaDelivery,
-				}}
-
-				userinfocache.Set(token, v, cache.NoExpiration)
-				log.Info().Str("name", name).Msg("User info name from DB")
-				ctx = context.WithValue(r.Context(), "userinfo", v)
+			historyStr := "0"
+			if history.Valid {
+				historyStr = fmt.Sprintf("%d", history.Int64)
 			}
+
+			// Debug opcional
+			log.Debug().
+				Str("userId", txtid).
+				Bool("historyValid", history.Valid).
+				Int64("historyValue", history.Int64).
+				Str("historyStr", historyStr).
+				Msg("User authentication - history debug")
+
+			v := Values{map[string]string{
+				"Id":            txtid,
+				"Name":          name,
+				"Jid":           jid,
+				"Webhook":       webhook,
+				"Token":         token,
+				"Proxy":         proxyURL,
+				"Events":        events,
+				"Qrcode":        qrcode,
+				"History":       historyStr,
+				"HasHmac":       strconv.FormatBool(hasHmac),
+				"S3Enabled":     s3Enabled,
+				"MediaDelivery": mediaDelivery,
+			}}
+
+			userinfocache.Set(token, v, cache.NoExpiration)
+
+			log.Info().Str("name", name).Msg("User info name from DB")
+
+			ctx = context.WithValue(r.Context(), "userinfo", v)
+
 		} else {
-			ctx = context.WithValue(r.Context(), "userinfo", myuserinfo)
-			log.Info().Str("name", myuserinfo.(Values).Get("name")).Msg("User info name from Cache")
-			txtid = myuserinfo.(Values).Get("Id")
+			// 🔥 cache hit
+			v := myuserinfo.(Values)
+
+			ctx = context.WithValue(r.Context(), "userinfo", v)
+
+			log.Info().
+				Str("name", v.Get("Name")).
+				Msg("User info name from Cache")
+
+			txtid = v.Get("Id")
 		}
 
 		if txtid == "" {
 			s.Respond(w, r, http.StatusUnauthorized, errors.New("unauthorized"))
 			return
 		}
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -1302,12 +1349,13 @@ func (s *server) SendImage() http.HandlerFunc {
 		defer tmpFile.Close()
 
 		// write new image to file
-		if err := jpeg.Encode(tmpFile, m, nil); err != nil {
+		var thumbBuf bytes.Buffer
+		if err := jpeg.Encode(&thumbBuf, m, nil); err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to encode jpeg: %v", err)))
 			return
 		}
 
-		thumbnailBytes, err = os.ReadFile(tmpFile.Name())
+		thumbnailBytes = thumbBuf.Bytes()
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to read %s: %v", tmpFile.Name(), err)))
 			return
