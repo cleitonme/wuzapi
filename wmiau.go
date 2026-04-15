@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -31,6 +32,17 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"golang.org/x/net/proxy"
 )
+
+var historySyncSem = make(chan struct{}, 3)
+
+type trimRequest struct {
+	userID  string
+	chatJID string
+	limit   int
+}
+
+var trimDebouncer = make(map[string]*time.Timer)
+var trimMu sync.Mutex
 
 // db field declaration as *sqlx.DB
 type MyClient struct {
@@ -767,11 +779,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		// Check if automatic history sync is enabled and trigger it after QR code is scanned
 		var daysToSyncHistory int
-		query := "SELECT COALESCE(days_to_sync_history, 0) FROM users WHERE id=$1"
+		query := "SELECT COALESCE(history, 0) FROM users WHERE id=$1"
 		query = mycli.db.Rebind(query)
 		err = mycli.db.Get(&daysToSyncHistory, query, mycli.userID)
 		if err != nil {
-			log.Warn().Err(err).Str("userID", mycli.userID).Msg("Failed to get days_to_sync_history from database")
+			log.Warn().Err(err).Str("userID", mycli.userID).Msg("Failed to get history from database")
 		} else if daysToSyncHistory > 0 {
 			// Trigger history sync in a goroutine to avoid blocking
 			// Wait a bit for the connection to be fully established
@@ -1455,13 +1467,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					replyToMessageID,
 					string(evtJSON),
 				)
+
 				if err != nil {
 					log.Error().Err(err).Msg("Failed to save message to history")
 				} else {
-					err = mycli.s.trimMessageHistory(mycli.userID, evt.Info.Chat.String(), historyLimit)
-					if err != nil {
-						log.Error().Err(err).Msg("Failed to trim message history")
-					}
+					// 🚀 NOVO: trim assíncrono com debounce
+					mycli.s.scheduleTrim(
+						mycli.userID,
+						evt.Info.Chat.String(),
+						historyLimit,
+					)
 				}
 			} else {
 				log.Debug().Str("messageType", messageType).Str("messageID", evt.Info.ID).Msg("Skipping empty message from history")
@@ -1506,17 +1521,21 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postmap["type"] = "HistorySync"
 		dowebhook = 1
 
-		// Save HistorySync messages to message_history table
 		if evt.Data != nil && evt.Data.Conversations != nil {
 			go func() {
 
-				// Get the account owner's JID for messages sent by the instance
+				// 🔥 semáforo
+				historySyncSem <- struct{}{}
+				defer func() { <-historySyncSem }()
+
 				accountOwnerJID := ""
 				if mycli.WAClient.Store != nil && mycli.WAClient.Store.ID != nil {
 					accountOwnerJID = mycli.WAClient.Store.ID.ToNonAD().String()
 				}
 
+				var batch []HistoryMessage
 				savedCount := 0
+
 				for _, conv := range evt.Data.Conversations {
 					if conv == nil || conv.ID == nil || conv.Messages == nil {
 						continue
@@ -1524,7 +1543,6 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 					chatJID, err := types.ParseJID(*conv.ID)
 					if err != nil {
-						log.Warn().Err(err).Str("convID", *conv.ID).Msg("Failed to parse conversation JID in HistorySync")
 						continue
 					}
 
@@ -1533,7 +1551,6 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							continue
 						}
 
-						// Extract message data
 						messageKey := msg.Message.GetKey()
 						if messageKey == nil {
 							continue
@@ -1544,45 +1561,39 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							continue
 						}
 
-						// Determine sender - never use "me", always use actual JID
-						// Use GetFromMe() from MessageKey to determine if message is from account owner
-						// This is more reliable than checking GetParticipant()
 						isFromMe := messageKey.GetFromMe()
+
+						// =========================
+						// senderJID
+						// =========================
 						var senderJID string
+						var senderJIDForInfo types.JID
 
 						if isFromMe {
-							// Message from account owner
 							senderJID = accountOwnerJID
 							if senderJID == "" {
-								// Fallback: use "me" if account owner JID is not available
 								senderJID = "me"
-								log.Warn().Str("messageID", messageID).Msg("accountOwnerJID is not available for a message from me, using 'me' as senderJID")
 							}
 						} else {
-							// Message from someone else
-							participantJID := messageKey.GetParticipant()
 							if chatJID.Server == types.GroupServer || chatJID.Server == types.BroadcastServer {
-								// Group message: use participant JID
-								senderJID = participantJID
+								senderJID = messageKey.GetParticipant()
 							} else {
-								// Direct message: sender is the chat itself (chat_jid)
 								senderJID = chatJID.String()
 							}
 						}
 
-						// If senderJID is still empty, skip this message
 						if senderJID == "" {
-							log.Warn().Str("messageID", messageID).Msg("Cannot determine sender JID, skipping message")
 							continue
 						}
 
-						// Get message content
+						// =========================
+						// message
+						// =========================
 						message := msg.Message.GetMessage()
 						if message == nil {
 							continue
 						}
 
-						// Extract message type and content
 						messageType := "unknown"
 						textContent := ""
 						mediaLink := ""
@@ -1591,109 +1602,65 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 						if message.GetConversation() != "" {
 							messageType = "text"
 							textContent = message.GetConversation()
+
 						} else if ext := message.GetExtendedTextMessage(); ext != nil {
 							messageType = "text"
 							textContent = ext.GetText()
-							if contextInfo := ext.GetContextInfo(); contextInfo != nil {
-								quotedMessageID = contextInfo.GetStanzaID()
+							if ci := ext.GetContextInfo(); ci != nil {
+								quotedMessageID = ci.GetStanzaID()
 							}
+
 						} else if img := message.GetImageMessage(); img != nil {
 							messageType = "image"
 							textContent = img.GetCaption()
+
 						} else if vid := message.GetVideoMessage(); vid != nil {
 							messageType = "video"
 							textContent = vid.GetCaption()
+
 						} else if audio := message.GetAudioMessage(); audio != nil {
 							messageType = "audio"
+
 						} else if doc := message.GetDocumentMessage(); doc != nil {
 							messageType = "document"
 							textContent = doc.GetCaption()
+
 						} else if sticker := message.GetStickerMessage(); sticker != nil {
 							messageType = "sticker"
-						} else if location := message.GetLocationMessage(); location != nil {
-							messageType = "location"
-							textContent = location.GetName()
-						} else if contact := message.GetContactMessage(); contact != nil {
-							messageType = "contact"
-							textContent = contact.GetDisplayName()
-						} else if buttons := message.GetButtonsResponseMessage(); buttons != nil {
-							messageType = "buttons_response"
-							textContent = buttons.GetSelectedButtonID()
-						} else if list := message.GetListResponseMessage(); list != nil {
-							messageType = "list_response"
-							textContent = list.GetSingleSelectReply().GetSelectedRowID()
-						} else if reaction := message.GetReactionMessage(); reaction != nil {
-							messageType = "reaction"
-							textContent = reaction.GetText()
-							if key := reaction.GetKey(); key != nil {
-								quotedMessageID = key.GetID()
-							}
 						}
 
-						// Set default text for media messages without captions
-						if textContent == "" && messageType != "text" && messageType != "reaction" && messageType != "delete" {
-							switch messageType {
-							case "image":
-								textContent = ":image:"
-							case "video":
-								textContent = ":video:"
-							case "audio":
-								textContent = ":audio:"
-							case "document":
-								textContent = ":document:"
-							case "sticker":
-								textContent = ":sticker:"
-							case "contact":
-								textContent = ":contact:"
-							case "location":
-								textContent = ":location:"
-							}
+						if textContent == "" && messageType != "text" {
+							textContent = ":" + messageType + ":"
 						}
 
-						// Get message timestamp
+						// =========================
+						// timestamp
+						// =========================
 						msgTimestamp := time.Now()
-						if timestamp := msg.Message.GetMessageTimestamp(); timestamp > 0 {
-							msgTimestamp = time.Unix(int64(timestamp), 0)
+						if ts := msg.Message.GetMessageTimestamp(); ts > 0 {
+							msgTimestamp = time.Unix(int64(ts), 0)
 						}
 
-						// Parse sender JID for MessageInfo
-						var senderJIDForInfo types.JID
+						// =========================
+						// senderJIDForInfo (CORRETO)
+						// =========================
 						if isFromMe {
 							if accountOwnerJID != "" {
-								var pErr error
-								senderJIDForInfo, pErr = types.ParseJID(accountOwnerJID)
-								if pErr != nil {
-									log.Warn().Err(pErr).Str("accountOwnerJID", accountOwnerJID).Msg("Failed to parse account owner JID in HistorySync")
-								}
+								senderJIDForInfo, _ = types.ParseJID(accountOwnerJID)
 							}
 						} else {
 							if chatJID.Server == types.GroupServer || chatJID.Server == types.BroadcastServer {
-								// Group: use participant JID
-								participant := messageKey.GetParticipant()
-								if participant != "" {
-									var pErr error
-									senderJIDForInfo, pErr = types.ParseJID(participant)
-									if pErr != nil {
-										log.Warn().Err(pErr).Str("participantJID", participant).Msg("Failed to parse participant JID in HistorySync")
-									}
+								if messageKey.GetParticipant() != "" {
+									senderJIDForInfo, _ = types.ParseJID(messageKey.GetParticipant())
 								}
 							} else {
-								// Direct message: sender is the chat
 								senderJIDForInfo = chatJID
 							}
 						}
 
-						// Try to get PushName from store if available
-						pushName := ""
-						if !isFromMe && senderJIDForInfo.User != "" {
-							if mycli.WAClient != nil && mycli.WAClient.Store != nil {
-								if contact, err := mycli.WAClient.Store.Contacts.GetContact(context.Background(), senderJIDForInfo); err == nil {
-									pushName = contact.PushName
-								}
-							}
-						}
-
-						// Create MessageInfo structure matching events.Message format
+						// =========================
+						// messageInfo (🔥 AGORA FUNCIONA)
+						// =========================
 						messageInfo := types.MessageInfo{
 							MessageSource: types.MessageSource{
 								Chat:     chatJID,
@@ -1704,12 +1671,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							ID:        messageID,
 							Timestamp: msgTimestamp,
 							Type:      messageType,
-							PushName:  pushName,
 						}
 
-						// Create events.Message-like structure for datajson
-						// This matches the format used in regular message events
-						// RawMessage should be the full waE2E.Message structure
+						// =========================
+						// DATAJSON (FORMATO ANTIGO)
+						// =========================
 						messageEvent := map[string]interface{}{
 							"Info":                  messageInfo,
 							"Message":               message,
@@ -1728,36 +1694,49 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							"RawMessage":            msg.Message,
 						}
 
-						// Serialize to JSON for datajson field
 						evtJSON, err := json.Marshal(messageEvent)
 						if err != nil {
-							log.Error().Err(err).Msg("Failed to marshal HistorySync message event to JSON")
 							evtJSON = []byte("{}")
 						}
 
-						// Save message to history
-						// Only save if there's meaningful content
-						if textContent != "" || mediaLink != "" || (messageType != "text" && messageType != "reaction") {
-							err = mycli.s.saveMessageToHistory(
-								mycli.userID,
-								chatJID.String(),
-								senderJID,
-								messageID,
-								messageType,
-								textContent,
-								mediaLink,
-								quotedMessageID,
-								string(evtJSON),
-							)
-							if err != nil {
-								log.Error().Err(err).
-									Str("userID", mycli.userID).
-									Str("chatJID", chatJID.String()).
-									Str("messageID", messageID).
-									Msg("Failed to save HistorySync message to history")
-							} else {
-								savedCount++
-							}
+						// =========================
+						// SAVE
+						// =========================
+						if textContent != "" || messageType != "text" {
+
+							batch = append(batch, HistoryMessage{
+								UserID:          mycli.userID,
+								ChatJID:         chatJID.String(),
+								SenderJID:       senderJID,
+								MessageID:       messageID,
+								Timestamp:       msgTimestamp,
+								MessageType:     messageType,
+								TextContent:     textContent,
+								MediaLink:       mediaLink,
+								QuotedMessageID: quotedMessageID,
+								DataJson:        string(evtJSON),
+							})
+
+							savedCount++
+						}
+					}
+				}
+
+				// =========================
+				// BATCH INSERT
+				// =========================
+				if len(batch) > 0 {
+					const batchSize = 500
+
+					for i := 0; i < len(batch); i += batchSize {
+						end := i + batchSize
+						if end > len(batch) {
+							end = len(batch)
+						}
+
+						err := mycli.s.batchSaveHistoryMessages(batch[i:end])
+						if err != nil {
+							log.Error().Err(err).Msg("batch insert error")
 						}
 					}
 				}
@@ -1766,7 +1745,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					log.Info().
 						Str("userID", mycli.userID).
 						Int("savedCount", savedCount).
-						Msg("Saved HistorySync messages to message_history")
+						Msg("HistorySync saved (fixed)")
 				}
 			}()
 		}

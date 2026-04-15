@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"time"
-
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/rs/zerolog/log"
 	_ "modernc.org/sqlite"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 type DatabaseConfig struct {
@@ -184,4 +185,85 @@ func (s *server) trimMessageHistory(userID, chatJID string, limit int) error {
 	}
 
 	return nil
+}
+
+func (s *server) batchSaveHistoryMessages(messages []HistoryMessage) error {
+
+	if len(messages) == 0 {
+		return nil
+	}
+
+	valueStrings := make([]string, 0, len(messages))
+	valueArgs := make([]interface{}, 0, len(messages)*10)
+
+	isPostgres := s.db.DriverName() == "postgres"
+
+	for i, m := range messages {
+
+		if isPostgres {
+			idx := i * 10
+
+			valueStrings = append(valueStrings,
+				fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+					idx+1, idx+2, idx+3, idx+4, idx+5,
+					idx+6, idx+7, idx+8, idx+9, idx+10))
+		} else {
+			valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		}
+
+		valueArgs = append(valueArgs,
+			m.UserID,
+			m.ChatJID,
+			m.SenderJID,
+			m.MessageID,
+			m.Timestamp,
+			m.MessageType,
+			m.TextContent,
+			m.MediaLink,
+			m.QuotedMessageID,
+			m.DataJson,
+		)
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO message_history
+		(user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
+		VALUES %s
+	`, strings.Join(valueStrings, ","))
+
+	// Postgres pode usar ON CONFLICT
+	if isPostgres {
+		query += " ON CONFLICT (user_id, message_id) DO NOTHING"
+	}
+
+	_, err := s.db.Exec(query, valueArgs...)
+	return err
+}
+
+func (s *server) scheduleTrim(userID, chatJID string, limit int) {
+	key := userID + "|" + chatJID
+
+	trimMu.Lock()
+	defer trimMu.Unlock()
+
+	if t, ok := trimDebouncer[key]; ok {
+		// já existe → só reseta o timer
+		t.Reset(10 * time.Second)
+		return
+	}
+
+	// cria novo timer
+	trimDebouncer[key] = time.AfterFunc(10*time.Second, func() {
+		err := s.trimMessageHistory(userID, chatJID, limit)
+		if err != nil {
+			log.Error().Err(err).
+				Str("userID", userID).
+				Str("chatJID", chatJID).
+				Msg("Failed to trim message history (debounced)")
+		}
+
+		trimMu.Lock()
+		delete(trimDebouncer, key)
+		trimMu.Unlock()
+	})
 }
