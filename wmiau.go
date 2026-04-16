@@ -33,6 +33,14 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+const (
+	downloadTimeoutImage    = 2 * time.Minute
+	downloadTimeoutAudio    = 5 * time.Minute
+	downloadTimeoutDocument = 10 * time.Minute
+	downloadTimeoutVideo    = 10 * time.Minute
+	downloadTimeoutSticker  = 1 * time.Minute
+)
+
 var historySyncSem = make(chan struct{}, 3)
 
 type trimRequest struct {
@@ -930,7 +938,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 
 					// Download the image
-					data, err := mycli.WAClient.Download(context.Background(), img)
+					ctx, cancel := context.WithTimeout(context.Background(), downloadTimeoutImage)
+					defer cancel()
+					data, err := mycli.WAClient.Download(ctx, img)
 					if err != nil {
 						log.Error().Err(err).Msg("Failed to download image")
 						return
@@ -1014,7 +1024,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 
 					// Download the audio
-					data, err := mycli.WAClient.Download(context.Background(), audio)
+					ctx, cancel := context.WithTimeout(context.Background(), downloadTimeoutAudio)
+					defer cancel()
+					data, err := mycli.WAClient.Download(ctx, audio)
 					if err != nil {
 						log.Error().Err(err).Msg("Failed to download audio")
 						return
@@ -1104,7 +1116,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 
 					// Download the document
-					data, err := mycli.WAClient.Download(context.Background(), document)
+					ctx, cancel := context.WithTimeout(context.Background(), downloadTimeoutDocument)
+					defer cancel()
+					data, err := mycli.WAClient.Download(ctx, document)
 					if err != nil {
 						log.Error().Err(err).Msg("Failed to download document")
 						return
@@ -1199,7 +1213,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 
 					// Download the video
-					data, err := mycli.WAClient.Download(context.Background(), video)
+					ctx, cancel := context.WithTimeout(context.Background(), downloadTimeoutVideo)
+					defer cancel()
+					data, err := mycli.WAClient.Download(ctx, video)
 					if err != nil {
 						log.Error().Err(err).Msg("Failed to download video")
 						return
@@ -1281,7 +1297,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 
 					// download the sticker using the DownloadableMessage interface
-					data, err := mycli.WAClient.Download(context.Background(), sticker)
+					ctx, cancel := context.WithTimeout(context.Background(), downloadTimeoutSticker)
+					defer cancel()
+					data, err := mycli.WAClient.Download(ctx, sticker)
 					if err != nil {
 						log.Error().Err(err).Msg("Failed to download sticker")
 						return
