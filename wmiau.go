@@ -862,6 +862,15 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
+		// Ignorar status broadcast e newsletters
+		chatStr := evt.Info.Chat.String()
+		if evt.Info.Chat.Server == "broadcast" || strings.Contains(chatStr, "@newsletter") {
+			log.Debug().
+				Str("chat", chatStr).
+				Str("id", evt.Info.ID).
+				Msg("Message ignorada (status@broadcast / newsletter)")
+			return
+		}
 
 		var s3Config struct {
 			Enabled       string `db:"s3_enabled"`
@@ -1484,23 +1493,29 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 	case *events.Receipt:
+		// Ignorar receipts de grupo — só log debug
+		if evt.IsGroup {
+			log.Debug().
+				Strs("id", evt.MessageIDs).
+				Str("source", evt.SourceString()).
+				Str("chat", evt.Chat.String()).
+				Msg("ReadReceipt de grupo ignorado")
+			return
+		}
+
 		postmap["type"] = "ReadReceipt"
 		dowebhook = 1
-		//if evt.Type == events.ReceiptTypeRead || evt.Type == events.ReceiptTypeReadSelf {
 		if evt.Type == types.ReceiptTypeRead || evt.Type == types.ReceiptTypeReadSelf {
 			log.Info().Strs("id", evt.MessageIDs).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%v", evt.Timestamp)).Msg("Message was read")
-			//if evt.Type == events.ReceiptTypeRead {
 			if evt.Type == types.ReceiptTypeRead {
 				postmap["state"] = "Read"
 			} else {
 				postmap["state"] = "ReadSelf"
 			}
-			//} else if evt.Type == events.ReceiptTypeDelivered {
 		} else if evt.Type == types.ReceiptTypeDelivered {
 			postmap["state"] = "Delivered"
 			log.Info().Str("id", evt.MessageIDs[0]).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%v", evt.Timestamp)).Msg("Message delivered")
 		} else {
-			// Discard webhooks for inactive or other delivery types
 			return
 		}
 	case *events.Presence:
