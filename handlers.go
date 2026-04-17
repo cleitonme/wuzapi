@@ -5403,7 +5403,9 @@ func (s *server) EditUser() http.HandlerFunc {
 
 				// Update cache fields that were modified
 				if user.Name != "" {
-					updatedUserInfo = updateUserInfo(updatedUserInfo, "Name", user.Name).(Values)
+					if v, ok := updateUserInfo(updatedUserInfo, "Name", user.Name).(Values); ok {
+                        updatedUserInfo = v
+                    }
 				}
 				if user.Token != "" {
 					// If token changed, we need to update the cache key
