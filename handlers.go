@@ -321,13 +321,13 @@ func (s *server) Connect() http.HandlerFunc {
 		if t.Immediate == false {
 			log.Warn().Msg("Waiting 10 seconds")
 			deadline := time.Now().Add(10 * time.Second)
-            for time.Now().Before(deadline) {
-                cli := clientManager.GetWhatsmeowClient(txtid)
-                if cli != nil && cli.IsConnected() {
-                    break
-                }
-                time.Sleep(500 * time.Millisecond)
-            }
+			for time.Now().Before(deadline) {
+				cli := clientManager.GetWhatsmeowClient(txtid)
+				if cli != nil && cli.IsConnected() {
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
 
 			if clientManager.GetWhatsmeowClient(txtid) != nil {
 				if !clientManager.GetWhatsmeowClient(txtid).IsConnected() {
@@ -3448,7 +3448,6 @@ func (s *server) ChatPresence() http.HandlerFunc {
 
 // Downloads Image and returns base64 representation
 func (s *server) DownloadImage() http.HandlerFunc {
-
 	type downloadImageStruct struct {
 		Url           string
 		DirectPath    string
@@ -3458,76 +3457,34 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		FileSHA256    []byte
 		FileLength    uint64
 	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		mimetype := ""
-		var imgdata []byte
-
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
-
-		// check/creates user directory for files
-		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
-		_, err := os.Stat(userDirectory)
-		if os.IsNotExist(err) {
-			errDir := os.MkdirAll(userDirectory, 0751)
-			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
-				return
-			}
-		}
-
-		decoder := json.NewDecoder(r.Body)
 		var t downloadImageStruct
-		err = decoder.Decode(&t)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-
-		msg := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-			URL:           proto.String(t.Url),
-			DirectPath:    proto.String(t.DirectPath),
-			MediaKey:      t.MediaKey,
-			Mimetype:      proto.String(t.Mimetype),
-			FileEncSHA256: t.FileEncSHA256,
-			FileSHA256:    t.FileSHA256,
-			FileLength:    &t.FileLength,
-		}}
-
-		img := msg.GetImageMessage()
-
-		if img != nil {
-			imgdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), img)
-			if err != nil {
-				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download image")
-				msg := fmt.Sprintf("failed to download image %v", err)
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
-				return
-			}
-			mimetype = img.GetMimetype()
-		}
-
-		dataURL := dataurl.New(imgdata, mimetype)
-		response := map[string]interface{}{"Mimetype": mimetype, "Data": dataURL.String()}
-		responseJson, err := json.Marshal(response)
+		result, err := buildAndDownloadImage(r.Context(), clientManager.GetWhatsmeowClient(txtid), mediaDownloadParams{
+			URL: t.Url, DirectPath: t.DirectPath, MediaKey: t.MediaKey,
+			MimeType: t.Mimetype, FileEncSHA256: t.FileEncSHA256,
+			FileSHA256: t.FileSHA256, FileLength: t.FileLength,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to download image: %v", err)))
+			return
 		}
-		return
+		response := map[string]interface{}{"Mimetype": result.MimeType, "Data": result.DataURL}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
 // Downloads Document and returns base64 representation
 func (s *server) DownloadDocument() http.HandlerFunc {
-
 	type downloadDocumentStruct struct {
 		Url           string
 		DirectPath    string
@@ -3537,70 +3494,29 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		FileSHA256    []byte
 		FileLength    uint64
 	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		mimetype := ""
-		var docdata []byte
-
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
-
-		// check/creates user directory for files
-		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
-		_, err := os.Stat(userDirectory)
-		if os.IsNotExist(err) {
-			errDir := os.MkdirAll(userDirectory, 0751)
-			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
-				return
-			}
-		}
-
-		decoder := json.NewDecoder(r.Body)
 		var t downloadDocumentStruct
-		err = decoder.Decode(&t)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-
-		msg := &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
-			URL:           proto.String(t.Url),
-			DirectPath:    proto.String(t.DirectPath),
-			MediaKey:      t.MediaKey,
-			Mimetype:      proto.String(t.Mimetype),
-			FileEncSHA256: t.FileEncSHA256,
-			FileSHA256:    t.FileSHA256,
-			FileLength:    &t.FileLength,
-		}}
-
-		doc := msg.GetDocumentMessage()
-
-		if doc != nil {
-			docdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), doc)
-			if err != nil {
-				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download document")
-				msg := fmt.Sprintf("failed to download document %v", err)
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
-				return
-			}
-			mimetype = doc.GetMimetype()
-		}
-
-		dataURL := dataurl.New(docdata, mimetype)
-		response := map[string]interface{}{"Mimetype": mimetype, "Data": dataURL.String()}
-		responseJson, err := json.Marshal(response)
+		result, err := buildAndDownloadDocument(r.Context(), clientManager.GetWhatsmeowClient(txtid), mediaDownloadParams{
+			URL: t.Url, DirectPath: t.DirectPath, MediaKey: t.MediaKey,
+			MimeType: t.Mimetype, FileEncSHA256: t.FileEncSHA256,
+			FileSHA256: t.FileSHA256, FileLength: t.FileLength,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to download image: %v", err)))
+			return
 		}
-		return
+		response := map[string]interface{}{"Mimetype": result.MimeType, "Data": result.DataURL}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -3616,70 +3532,29 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		FileSHA256    []byte
 		FileLength    uint64
 	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		mimetype := ""
-		var docdata []byte
-
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
-
-		// check/creates user directory for files
-		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
-		_, err := os.Stat(userDirectory)
-		if os.IsNotExist(err) {
-			errDir := os.MkdirAll(userDirectory, 0751)
-			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
-				return
-			}
-		}
-
-		decoder := json.NewDecoder(r.Body)
 		var t downloadVideoStruct
-		err = decoder.Decode(&t)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-
-		msg := &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
-			URL:           proto.String(t.Url),
-			DirectPath:    proto.String(t.DirectPath),
-			MediaKey:      t.MediaKey,
-			Mimetype:      proto.String(t.Mimetype),
-			FileEncSHA256: t.FileEncSHA256,
-			FileSHA256:    t.FileSHA256,
-			FileLength:    &t.FileLength,
-		}}
-
-		doc := msg.GetVideoMessage()
-
-		if doc != nil {
-			docdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), doc)
-			if err != nil {
-				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download video")
-				msg := fmt.Sprintf("failed to download video %v", err)
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
-				return
-			}
-			mimetype = doc.GetMimetype()
-		}
-
-		dataURL := dataurl.New(docdata, mimetype)
-		response := map[string]interface{}{"Mimetype": mimetype, "Data": dataURL.String()}
-		responseJson, err := json.Marshal(response)
+		result, err := buildAndDownloadVideo(r.Context(), clientManager.GetWhatsmeowClient(txtid), mediaDownloadParams{
+			URL: t.Url, DirectPath: t.DirectPath, MediaKey: t.MediaKey,
+			MimeType: t.Mimetype, FileEncSHA256: t.FileEncSHA256,
+			FileSHA256: t.FileSHA256, FileLength: t.FileLength,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to download image: %v", err)))
+			return
 		}
-		return
+		response := map[string]interface{}{"Mimetype": result.MimeType, "Data": result.DataURL}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -3695,70 +3570,29 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		FileSHA256    []byte
 		FileLength    uint64
 	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		mimetype := ""
-		var docdata []byte
-
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
-
-		// check/creates user directory for files
-		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
-		_, err := os.Stat(userDirectory)
-		if os.IsNotExist(err) {
-			errDir := os.MkdirAll(userDirectory, 0751)
-			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
-				return
-			}
-		}
-
-		decoder := json.NewDecoder(r.Body)
 		var t downloadAudioStruct
-		err = decoder.Decode(&t)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-
-		msg := &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
-			URL:           proto.String(t.Url),
-			DirectPath:    proto.String(t.DirectPath),
-			MediaKey:      t.MediaKey,
-			Mimetype:      proto.String(t.Mimetype),
-			FileEncSHA256: t.FileEncSHA256,
-			FileSHA256:    t.FileSHA256,
-			FileLength:    &t.FileLength,
-		}}
-
-		doc := msg.GetAudioMessage()
-
-		if doc != nil {
-			docdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), doc)
-			if err != nil {
-				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download audio")
-				msg := fmt.Sprintf("failed to download audio %v", err)
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
-				return
-			}
-			mimetype = doc.GetMimetype()
-		}
-
-		dataURL := dataurl.New(docdata, mimetype)
-		response := map[string]interface{}{"Mimetype": mimetype, "Data": dataURL.String()}
-		responseJson, err := json.Marshal(response)
+		result, err := buildAndDownloadAudio(r.Context(), clientManager.GetWhatsmeowClient(txtid), mediaDownloadParams{
+			URL: t.Url, DirectPath: t.DirectPath, MediaKey: t.MediaKey,
+			MimeType: t.Mimetype, FileEncSHA256: t.FileEncSHA256,
+			FileSHA256: t.FileSHA256, FileLength: t.FileLength,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to download image: %v", err)))
+			return
 		}
-		return
+		response := map[string]interface{}{"Mimetype": result.MimeType, "Data": result.DataURL}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
@@ -5404,8 +5238,8 @@ func (s *server) EditUser() http.HandlerFunc {
 				// Update cache fields that were modified
 				if user.Name != "" {
 					if v, ok := updateUserInfo(updatedUserInfo, "Name", user.Name).(Values); ok {
-                        updatedUserInfo = v
-                    }
+						updatedUserInfo = v
+					}
 				}
 				if user.Token != "" {
 					// If token changed, we need to update the cache key
@@ -5635,8 +5469,8 @@ func (s *server) Respond(w http.ResponseWriter, r *http.Request, status int, dat
 	}
 
 	if err := json.NewEncoder(w).Encode(dataenvelope); err != nil {
-        log.Error().Err(err).Msg("Failed to encode response")
-    }
+		log.Error().Err(err).Msg("Failed to encode response")
+	}
 }
 
 // Validate message fields
@@ -6372,10 +6206,7 @@ func (s *server) saveOutgoingMessageToHistory(userID, chatJID, messageID, messag
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to save outgoing message to history")
 		} else {
-			err = s.scheduleTrim(userID, chatJID, historyLimit)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to trim message history")
-			}
+			s.scheduleTrim(userID, chatJID, historyLimit)
 		}
 	}
 }
@@ -6782,69 +6613,28 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		FileSHA256    []byte
 		FileLength    uint64
 	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		mimetype := ""
-		var stickerdata []byte
-
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
-
-		// check/creates user directory for files
-		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
-		_, err := os.Stat(userDirectory)
-		if os.IsNotExist(err) {
-			errDir := os.MkdirAll(userDirectory, 0751)
-			if errDir != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("could not create user directory (%s)", userDirectory)))
-				return
-			}
-		}
-
-		decoder := json.NewDecoder(r.Body)
 		var t downloadStickerStruct
-		err = decoder.Decode(&t)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
-
-		msg := &waE2E.Message{StickerMessage: &waE2E.StickerMessage{
-			URL:           proto.String(t.Url),
-			DirectPath:    proto.String(t.DirectPath),
-			MediaKey:      t.MediaKey,
-			Mimetype:      proto.String(t.Mimetype),
-			FileEncSHA256: t.FileEncSHA256,
-			FileSHA256:    t.FileSHA256,
-			FileLength:    &t.FileLength,
-		}}
-
-		sticker := msg.GetStickerMessage()
-
-		if sticker != nil {
-			stickerdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), sticker)
-			if err != nil {
-				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download sticker")
-				msg := fmt.Sprintf("failed to download sticker %v", err)
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
-				return
-			}
-			mimetype = sticker.GetMimetype()
-		}
-
-		dataURL := dataurl.New(stickerdata, mimetype)
-		response := map[string]interface{}{"Mimetype": mimetype, "Data": dataURL.String()}
-		responseJson, err := json.Marshal(response)
+		result, err := buildAndDownloadSticker(r.Context(), clientManager.GetWhatsmeowClient(txtid), mediaDownloadParams{
+			URL: t.Url, DirectPath: t.DirectPath, MediaKey: t.MediaKey,
+			MimeType: t.Mimetype, FileEncSHA256: t.FileEncSHA256,
+			FileSHA256: t.FileSHA256, FileLength: t.FileLength,
+		})
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to download image: %v", err)))
+			return
 		}
-		return
+		response := map[string]interface{}{"Mimetype": result.MimeType, "Data": result.DataURL}
+		responseJson, _ := json.Marshal(response)
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
