@@ -320,7 +320,14 @@ func (s *server) Connect() http.HandlerFunc {
 
 		if t.Immediate == false {
 			log.Warn().Msg("Waiting 10 seconds")
-			time.Sleep(10000 * time.Millisecond)
+			deadline := time.Now().Add(10 * time.Second)
+            for time.Now().Before(deadline) {
+                cli := clientManager.GetWhatsmeowClient(txtid)
+                if cli != nil && cli.IsConnected() {
+                    break
+                }
+                time.Sleep(500 * time.Millisecond)
+            }
 
 			if clientManager.GetWhatsmeowClient(txtid) != nil {
 				if !clientManager.GetWhatsmeowClient(txtid).IsConnected() {
