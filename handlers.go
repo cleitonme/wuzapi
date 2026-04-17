@@ -1348,13 +1348,6 @@ func (s *server) SendImage() http.HandlerFunc {
 		// resize to width 72 using Lanczos resampling and preserve aspect ratio
 		m := resize.Thumbnail(72, 72, img, resize.Lanczos3)
 
-		tmpFile, err := os.CreateTemp("", "resized-*.jpg")
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Could not create temp file for thumbnail: %v", err)))
-			return
-		}
-		defer tmpFile.Close()
-
 		// write new image to file
 		var thumbBuf bytes.Buffer
 		if err := jpeg.Encode(&thumbBuf, m, nil); err != nil {
@@ -1364,7 +1357,7 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		thumbnailBytes = thumbBuf.Bytes()
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to read %s: %v", tmpFile.Name(), err)))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to read %s: %v", err)))
 			return
 		}
 
