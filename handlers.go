@@ -6372,7 +6372,7 @@ func (s *server) saveOutgoingMessageToHistory(userID, chatJID, messageID, messag
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to save outgoing message to history")
 		} else {
-			err = s.trimMessageHistory(userID, chatJID, historyLimit)
+			err = s.scheduleTrim(userID, chatJID, historyLimit)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to trim message history")
 			}
