@@ -5635,8 +5635,8 @@ func (s *server) Respond(w http.ResponseWriter, r *http.Request, status int, dat
 	}
 
 	if err := json.NewEncoder(w).Encode(dataenvelope); err != nil {
-		panic("respond: " + err.Error())
-	}
+        log.Error().Err(err).Msg("Failed to encode response")
+    }
 }
 
 // Validate message fields
