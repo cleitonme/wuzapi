@@ -73,7 +73,6 @@ var (
 
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
-	killchannel      = make(map[string](chan bool))
 	userinfocache    = cache.New(cache.NoExpiration, 30*time.Minute)
 	lastMessageCache = cache.New(24*time.Hour, 24*time.Hour)
 	globalHTTPClient = newSafeHTTPClient()

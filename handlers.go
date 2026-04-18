@@ -315,7 +315,7 @@ func (s *server) Connect() http.HandlerFunc {
 		userinfocache.Set(token, v, cache.NoExpiration)
 
 		log.Info().Str("jid", jid).Msg("Attempt to connect")
-		killchannel[txtid] = make(chan bool, 1)
+		killchannel.Create(txtid)
 		go s.startClient(txtid, jid, token, subscribedEvents)
 
 		if t.Immediate == false {
@@ -379,10 +379,7 @@ func (s *server) Disconnect() http.HandlerFunc {
 			responseJson, err := json.Marshal(response)
 
 			clientManager.DeleteWhatsmeowClient(txtid)
-			select {
-			case killchannel[txtid] <- true:
-			default:
-			}
+			killchannel.Send(txtid)
 
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
@@ -390,11 +387,6 @@ func (s *server) Disconnect() http.HandlerFunc {
 				s.Respond(w, r, http.StatusOK, string(responseJson))
 			}
 			return
-			//} else {
-			//	log.Warn().Str("jid", jid).Msg("Ignoring disconnect as it was not connected")
-			//	s.Respond(w, r, http.StatusInternalServerError, errors.New("Cannot disconnect because it is not logged in"))
-			//	return
-			//}
 		} else {
 			log.Warn().Str("jid", jid).Msg("Ignoring disconnect as it was not connected")
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("cannot disconnect because it is not logged in"))
@@ -683,10 +675,7 @@ func (s *server) Logout() http.HandlerFunc {
 				} else {
 					log.Info().Str("jid", jid).Msg("Logged out")
 					clientManager.DeleteWhatsmeowClient(txtid)
-					select {
-					case killchannel[txtid] <- true:
-					default:
-					}
+					killchannel.Send(txtid)
 				}
 			} else {
 				if clientManager.GetWhatsmeowClient(txtid).IsConnected() == true {
