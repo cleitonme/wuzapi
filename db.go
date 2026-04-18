@@ -136,10 +136,69 @@ func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID, mes
 }
 
 func (s *server) trimMessageHistory(userID, chatJID string, limit int) error {
-	var queryHistory, querySecrets string
+    isPostgres := s.db.DriverName() == "postgres"
 
-	if s.db.DriverName() == "postgres" {
-		queryHistory = `
+    // 1. Primeiro: identificar mensagens a deletar
+    var selectOld string
+    if isPostgres {
+        selectOld = `
+            SELECT message_id FROM message_history
+            WHERE user_id = $1 AND chat_jid = $2
+            ORDER BY timestamp DESC
+            OFFSET $3`
+    } else {
+        selectOld = `
+            SELECT message_id FROM message_history
+            WHERE user_id = ? AND chat_jid = ?
+            ORDER BY timestamp DESC
+            LIMIT -1 OFFSET ?`
+    }
+
+    rows, err := s.db.Query(selectOld, userID, chatJID, limit)
+    if err != nil {
+        return fmt.Errorf("failed to select old messages: %w", err)
+    }
+
+    var messageIDs []string
+    for rows.Next() {
+        var id string
+        if err := rows.Scan(&id); err != nil {
+            rows.Close()
+            return fmt.Errorf("failed to scan message_id: %w", err)
+        }
+        messageIDs = append(messageIDs, id)
+    }
+    rows.Close()
+
+    if len(messageIDs) == 0 {
+        return nil // nada a deletar
+    }
+
+    // 2. Deletar secrets ANTES do history (FK ainda válida)
+    // whatsmeow_message_secrets usa chat_jid + message_id como chave composta
+    // então filtramos por ambos para não apagar secrets de outros chats
+    for _, msgID := range messageIDs {
+        var qSec string
+        if isPostgres {
+            qSec = `DELETE FROM whatsmeow_message_secrets
+                    WHERE chat_jid = $1 AND message_id = $2`
+        } else {
+            qSec = `DELETE FROM whatsmeow_message_secrets
+                    WHERE chat_jid = ? AND message_id = ?`
+        }
+        if _, err := s.db.Exec(qSec, chatJID, msgID); err != nil {
+            log.Warn().Err(err).
+                Str("chatJID", chatJID).
+                Str("messageID", msgID).
+                Msg("Failed to delete message secret, continuing")
+            // não aborta — secret orphan é menos grave que history preso
+        }
+    }
+
+    // 3. Deletar history
+    var queryHistory string
+    if isPostgres {
+        queryHistory = `
             DELETE FROM message_history
             WHERE id IN (
                 SELECT id FROM message_history
@@ -147,17 +206,8 @@ func (s *server) trimMessageHistory(userID, chatJID string, limit int) error {
                 ORDER BY timestamp DESC
                 OFFSET $3
             )`
-
-		querySecrets = `
-            DELETE FROM whatsmeow_message_secrets
-            WHERE message_id IN (
-                SELECT message_id FROM message_history
-                WHERE user_id = $1 AND chat_jid = $2
-                ORDER BY timestamp DESC
-                OFFSET $3
-            )`
-	} else { // sqlite
-		queryHistory = `
+    } else {
+        queryHistory = `
             DELETE FROM message_history
             WHERE id IN (
                 SELECT id FROM message_history
@@ -165,26 +215,13 @@ func (s *server) trimMessageHistory(userID, chatJID string, limit int) error {
                 ORDER BY timestamp DESC
                 LIMIT -1 OFFSET ?
             )`
+    }
 
-		querySecrets = `
-            DELETE FROM whatsmeow_message_secrets
-            WHERE message_id IN (
-                SELECT message_id FROM message_history
-                WHERE user_id = ? AND chat_jid = ?
-                ORDER BY timestamp DESC
-                LIMIT -1 OFFSET ?
-            )`
-	}
+    if _, err := s.db.Exec(queryHistory, userID, chatJID, limit); err != nil {
+        return fmt.Errorf("failed to trim message history: %w", err)
+    }
 
-	if _, err := s.db.Exec(querySecrets, userID, chatJID, limit); err != nil {
-		return fmt.Errorf("failed to trim message secrets: %w", err)
-	}
-
-	if _, err := s.db.Exec(queryHistory, userID, chatJID, limit); err != nil {
-		return fmt.Errorf("failed to trim message history: %w", err)
-	}
-
-	return nil
+    return nil
 }
 
 func (s *server) batchSaveHistoryMessages(messages []HistoryMessage) error {
