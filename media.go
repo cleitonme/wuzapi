@@ -71,7 +71,7 @@ func (mycli *MyClient) processMedia(
 
 	if s3cfg.Enabled == "true" && (s3cfg.MediaDelivery == "s3" || s3cfg.MediaDelivery == "both") {
 		s3Data, err := GetS3Manager().ProcessMediaForS3(
-			context.Background(),
+			ctx,
 			mycli.userID,
 			chatJID,
 			messageID,
