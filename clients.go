@@ -123,11 +123,3 @@ func (cm *ClientManager) GetPollOptions(userID, msgID string) []string {
 	}
 	return nil
 }
-
-// DeletePollOptionsForUser drops all cached poll options for a user when
-// their session disconnects or is removed.
-func (cm *ClientManager) DeletePollOptionsForUser(userID string) {
-	cm.Lock()
-	defer cm.Unlock()
-	delete(cm.pollOptions, userID)
-}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -887,15 +886,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					hashB64 = append(hashB64, base64.StdEncoding.EncodeToString(h))
 				}
 
-				selected := []string{}
+				selected := make([]string, 0, len(hashes))
 				if stored := clientManager.GetPollOptions(mycli.userID, pollMsgID); len(stored) > 0 {
+					optionsByHash := make(map[string]string, len(stored))
+					for _, opt := range stored {
+						sum := sha256.Sum256([]byte(opt))
+						optionsByHash[string(sum[:])] = opt
+					}
 					for _, h := range hashes {
-						for _, opt := range stored {
-							sum := sha256.Sum256([]byte(opt))
-							if bytes.Equal(sum[:], h) {
-								selected = append(selected, opt)
-								break
-							}
+						if opt, found := optionsByHash[string(h)]; found {
+							selected = append(selected, opt)
 						}
 					}
 				}
