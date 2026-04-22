@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -862,6 +864,49 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
+
+		// If this is a poll vote, decrypt the E2E-encrypted payload so the
+		// webhook can expose which options were selected. Votes arrive as
+		// SHA-256 hashes of the option text; we match those back to the
+		// plaintext options remembered at send time (see SendPoll in
+		// handlers.go). If the session was restarted between send and vote
+		// we cannot resolve plaintext; hashes are still emitted so the
+		// consumer can perform matching itself if it has stored options.
+		if evt.Message.GetPollUpdateMessage() != nil {
+			pollMsgID := evt.Message.GetPollUpdateMessage().GetPollCreationMessageKey().GetID()
+
+			pollVote, perr := mycli.WAClient.DecryptPollVote(context.Background(), evt)
+			if perr != nil {
+				log.Warn().Err(perr).Str("pollMsgID", pollMsgID).Msg("DecryptPollVote failed")
+			}
+
+			if perr == nil && pollVote != nil {
+				hashes := pollVote.GetSelectedOptions()
+				hashB64 := make([]string, 0, len(hashes))
+				for _, h := range hashes {
+					hashB64 = append(hashB64, base64.StdEncoding.EncodeToString(h))
+				}
+
+				selected := []string{}
+				if stored := clientManager.GetPollOptions(mycli.userID, pollMsgID); len(stored) > 0 {
+					for _, h := range hashes {
+						for _, opt := range stored {
+							sum := sha256.Sum256([]byte(opt))
+							if bytes.Equal(sum[:], h) {
+								selected = append(selected, opt)
+								break
+							}
+						}
+					}
+				}
+
+				postmap["pollVote"] = map[string]interface{}{
+					"pollCreationMsgID": pollMsgID,
+					"selectedOptions":   selected,
+					"selectedHashesB64": hashB64,
+				}
+			}
+		}
 
 		if !*skipMedia {
 
