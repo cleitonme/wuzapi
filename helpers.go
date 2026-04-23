@@ -1028,3 +1028,16 @@ func writeChunk(buf *bytes.Buffer, tag string, data []byte) {
 		buf.WriteByte(0)
 	}
 }
+
+func parseTime(t interface{}) interface{} {
+	if t == nil {
+		return nil
+	}
+
+	switch v := t.(type) {
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}

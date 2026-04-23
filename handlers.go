@@ -6620,3 +6620,103 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
+
+func (s *server) GetWhatsAppStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
+
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		cappingInfo, _ := client.GetNewChatMessageCappingInfo(ctx)
+		timelockInfo, _ := client.GetAccountReachoutTimelock(ctx)
+
+		// -----------------------------
+		// DEFAULT RESPONSE (OK)
+		// -----------------------------
+		response := map[string]interface{}{
+			"provider":              "whatsapp",
+			"diagnostics_endpoint":  "/instance/wa_messages_limits",
+			"reachable":             true,
+			"can_send_new_messages": true,
+			"message":               "No WhatsApp restriction for starting new conversations was detected for the currently connected account.",
+			"message_ptbr":          "Nenhuma restrição de envio de novas conversas foi identificada no WhatsApp para a conta atualmente conectada.",
+		}
+
+		// -----------------------------
+		// NEW CHAT CAPPING
+		// -----------------------------
+		newChat := map[string]interface{}{
+			"available": false,
+		}
+
+		if cappingInfo != nil {
+			newChat["available"] = true
+			newChat["total_quota"] = cappingInfo.TotalQuota
+			newChat["used_quota"] = cappingInfo.UsedQuota
+			newChat["status"] = string(cappingInfo.CappingStatus)
+
+			newChat["cycle_start"] = parseTime(cappingInfo.CycleStartTimestamp)
+			newChat["cycle_end"] = parseTime(cappingInfo.CycleEndTimestamp)
+			newChat["server_sent_at"] = parseTime(cappingInfo.ServerSentTimestamp)
+
+			// bloqueio por capping
+			if cappingInfo.CappingStatus == "CAPPED" || cappingInfo.OTEStatus == "EXHAUSTED" {
+				response["can_send_new_messages"] = false
+				response["error_key"] = "WHATSAPP_CAPPING_LIMIT"
+				response["message"] = "WhatsApp indicates that the message limit for starting new conversations has been reached."
+				response["message_ptbr"] = "O WhatsApp indica que o limite de envio de novas conversas foi atingido."
+			}
+		}
+
+		response["new_chat_message_capping"] = newChat
+
+		// -----------------------------
+		// REACHOUT TIMELOCK
+		// -----------------------------
+		reachout := map[string]interface{}{
+			"available": false,
+			"active":    false,
+		}
+
+		if timelockInfo != nil {
+			reachout["available"] = true
+			reachout["active"] = timelockInfo.IsActive
+
+			if timelockInfo.IsActive {
+				reachout["enforcement_type"] = string(timelockInfo.EnforcementType)
+				reachout["until"] = parseTime(timelockInfo.TimeEnforcementEnds)
+
+				// 🔥 prioridade maior que capping
+				response["can_send_new_messages"] = false
+				response["error_key"] = "WHATSAPP_REACHOUT_TIMELOCK"
+
+				response["message"] = "WhatsApp indicates that the currently connected account is under a temporary restriction for starting new conversations. This is not an internal API error."
+				response["message_ptbr"] = "O WhatsApp indica que a conta atualmente conectada está sob uma restrição temporária para iniciar novas conversas. Isso não é um erro interno da API."
+
+				response["provider_message"] = "WhatsApp reported that the currently connected account is under a temporary restriction for starting new conversations, usually related to sending volume or quality."
+				response["provider_message_ptbr"] = "O WhatsApp informou que a conta atualmente conectada está sob uma restrição temporária para iniciar novas conversas, normalmente relacionada a volume ou qualidade de envios."
+			}
+		}
+
+		response["reachout_timelock"] = reachout
+
+		// -----------------------------
+		// FINAL RESPONSE
+		// -----------------------------
+		jsonResp, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+			return
+		}
+
+		s.Respond(w, r, http.StatusOK, string(jsonResp))
+	}
+}
