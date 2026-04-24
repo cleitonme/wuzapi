@@ -73,7 +73,7 @@ var (
 
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
-	userinfocache    = cache.New(cache.NoExpiration, 30*time.Minute)
+	userinfocache = cache.New(1*time.Hour, 30*time.Minute)
 	lastMessageCache = cache.New(24*time.Hour, 24*time.Hour)
 	globalHTTPClient = newSafeHTTPClient()
 )
