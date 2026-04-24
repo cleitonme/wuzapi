@@ -86,6 +86,9 @@ func (mc *MediaCache) uploadMedia(
 		Str("type", label).
 		Msg("🔍 Checking media cache")
 
+	// fullHash calculado lazy — só quando necessário
+	var fullHash string
+
 	// 🔎 tenta cache pelo quick hash
 	if cached, ok := mc.images.Load(quickKey); ok {
 		cachedMedia := cached.(*CachedImage)
@@ -93,7 +96,8 @@ func (mc *MediaCache) uploadMedia(
 		if time.Now().Before(cachedMedia.ExpiresAt) {
 
 			// 🔒 valida com hash completo (evita colisão falsa)
-			fullHash := hashBytes(filedata)
+			// calcula aqui pela primeira e única vez no fluxo de hit
+			fullHash = hashBytes(filedata)
 
 			if cachedMedia.HashFull == fullHash {
 				hits := atomic.AddUint64(&mc.imageHits, 1)
@@ -124,8 +128,11 @@ func (mc *MediaCache) uploadMedia(
 		Uint64("totalMisses", misses).
 		Msg("❌ CACHE MISS")
 
-	// 🔥 só aqui calcula SHA256 completo
-	fullHash := hashBytes(filedata)
+	// só calcula SHA256 completo se ainda não foi calculado
+	// (no fluxo de miss sem colisão, fullHash ainda está vazio)
+	if fullHash == "" {
+		fullHash = hashBytes(filedata)
+	}
 
 	uploaded, err := client.Upload(ctx, filedata, mediaType)
 	if err != nil {
