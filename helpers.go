@@ -40,6 +40,8 @@ import (
 	"github.com/nfnt/resize"
 	"github.com/rs/zerolog/log"
 	"github.com/vincent-petithory/dataurl"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -1040,4 +1042,40 @@ func parseTime(t interface{}) interface{} {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+func buildContextInfo(
+	ctxInfo waE2E.ContextInfo,
+	quotedMsg *waE2E.Message,
+) *waE2E.ContextInfo {
+
+	hasStanza := ctxInfo.StanzaID != nil
+	hasMention := ctxInfo.MentionedJID != nil
+	hasForward := ctxInfo.IsForwarded != nil && *ctxInfo.IsForwarded
+
+	if !hasStanza && !hasMention && !hasForward {
+		return nil
+	}
+
+	ci := &waE2E.ContextInfo{}
+
+	if hasStanza {
+		qm := quotedMsg
+		if qm == nil {
+			qm = &waE2E.Message{Conversation: proto.String("")}
+		}
+		ci.StanzaID = proto.String(*ctxInfo.StanzaID)
+		ci.Participant = proto.String(*ctxInfo.Participant)
+		ci.QuotedMessage = qm
+	}
+
+	if hasMention {
+		ci.MentionedJID = ctxInfo.MentionedJID
+	}
+
+	if hasForward {
+		ci.IsForwarded = proto.Bool(true)
+	}
+
+	return ci
 }

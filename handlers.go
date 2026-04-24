@@ -980,38 +980,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 			Caption:       proto.String(t.Caption),
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.DocumentMessage.ContextInfo == nil {
-				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.DocumentMessage.ContextInfo == nil {
-				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.DocumentMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.DocumentMessage.ContextInfo == nil {
-				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.DocumentMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.DocumentMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		ctx := context.Background()
 		if recipient.Server == types.GroupServer {
@@ -1165,38 +1134,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 			Waveform:      t.Waveform,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.AudioMessage.ContextInfo == nil {
-				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.AudioMessage.ContextInfo == nil {
-				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.AudioMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.AudioMessage.ContextInfo == nil {
-				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.AudioMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.AudioMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		ctx := context.Background()
 		if recipient.Server == types.GroupServer {
@@ -1367,39 +1305,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			JPEGThumbnail: thumbnailBytes,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.ImageMessage.ContextInfo == nil {
-				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.ImageMessage.ContextInfo == nil {
-				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ImageMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.ImageMessage.ContextInfo == nil {
-				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ImageMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.ImageMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		ctx := context.Background()
 		if recipient.Server == types.GroupServer {
@@ -1538,38 +1444,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 			PngThumbnail:  t.PngThumbnail,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.StickerMessage.ContextInfo == nil {
-				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.StickerMessage.ContextInfo == nil {
-				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.StickerMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.StickerMessage.ContextInfo == nil {
-				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.StickerMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.StickerMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
@@ -1712,38 +1587,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 			JPEGThumbnail: t.JPEGThumbnail,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.VideoMessage.ContextInfo == nil {
-				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.VideoMessage.ContextInfo == nil {
-				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.VideoMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.VideoMessage.ContextInfo == nil {
-				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.VideoMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.VideoMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		ctx := context.Background()
 		if recipient.Server == types.GroupServer {
@@ -1835,38 +1679,7 @@ func (s *server) SendContact() http.HandlerFunc {
 			Vcard:       &t.Vcard,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ContactMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ContactMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.ContactMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
@@ -1954,38 +1767,7 @@ func (s *server) SendLocation() http.HandlerFunc {
 			Name:             &t.Name,
 		}}
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{
-					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-					Participant:   proto.String(*t.ContextInfo.Participant),
-					QuotedMessage: qm,
-				}
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.LocationMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.LocationMessage.ContextInfo == nil {
-				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.LocationMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.LocationMessage.ContextInfo = buildContextInfo(t.ContextInfo, t.QuotedMessage)
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
@@ -2512,40 +2294,19 @@ func (s *server) SendMessage() http.HandlerFunc {
 				JPEGThumbnail: imageData,
 			},
 		}
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
 
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				qm = &waE2E.Message{}
-				if t.QuotedText != "" {
-					qm.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
-						Text: proto.String(t.QuotedText),
-					}
-				} else {
-					qm.Conversation = proto.String("")
-				}
+		var qm *waE2E.Message
+		if t.QuotedMessage != nil {
+			qm = t.QuotedMessage
+		} else if t.QuotedText != "" {
+			qm = &waE2E.Message{
+				ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+					Text: proto.String(t.QuotedText),
+				},
 			}
+		}
 
-			msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: qm,
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.ExtendedTextMessage.ContextInfo == nil {
-				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.ExtendedTextMessage.ContextInfo == nil {
-				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-			msg.ExtendedTextMessage.ContextInfo.IsForwarded = proto.Bool(true)
-		}
+		msg.ExtendedTextMessage.ContextInfo = buildContextInfo(t.ContextInfo, qm)
 
 		// OTIMIZAÇÃO: Use context com timeout maior para grupos
 		ctx := context.Background()
