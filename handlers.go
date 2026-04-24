@@ -787,8 +787,12 @@ func (s *server) GetStatus() http.HandlerFunc {
 
 		txtid := userInfo.Get("Id")
 
-		isConnected := clientManager.GetWhatsmeowClient(txtid).IsConnected()
-		isLoggedIn := clientManager.GetWhatsmeowClient(txtid).IsLoggedIn()
+		isConnected := false
+		isLoggedIn := false
+		if client := clientManager.GetWhatsmeowClient(txtid); client != nil {
+			isConnected = client.IsConnected()
+			isLoggedIn = client.IsLoggedIn()
+		}
 
 		var proxyURL string
 		s.db.QueryRow("SELECT proxy_url FROM users WHERE id = $1", txtid).Scan(&proxyURL)
