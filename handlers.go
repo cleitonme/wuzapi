@@ -1531,7 +1531,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 		var uploaded whatsmeow.UploadResponse
 		var filedata []byte
 
-		if t.Video[0:4] == "data" {
+		if strings.HasPrefix(t.Video, "data:") {
 			var dataURL, err = dataurl.DecodeString(t.Video)
 			if err != nil {
 				s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode base64 encoded data from payload"))
