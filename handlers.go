@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -124,7 +125,8 @@ func (s *server) GetHealth() http.HandlerFunc {
 func (s *server) authadmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("Authorization")
-		if token != *adminToken {
+		// Constant-time compare to avoid timing-attack leak of admin token bytes.
+		if subtle.ConstantTimeCompare([]byte(token), []byte(*adminToken)) != 1 {
 			s.Respond(w, r, http.StatusUnauthorized, errors.New("unauthorized"))
 			return
 		}
