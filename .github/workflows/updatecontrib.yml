@@ -2,6 +2,8 @@ name: Update Readme Contributors
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
 
 jobs:
   update-contributors:
@@ -10,20 +12,65 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Install jq
+        run: sudo apt-get install -y jq
 
-      - name: Install all-contributors CLI
-        run: npm install -g all-contributors-cli
-
-      - name: Generate contributors section
+      - name: Generate contributors grid
+        env:
+          REPO: ${{ github.repository }}
         run: |
-          npx all-contributors-cli generate
+          echo "Fetching contributors..."
+
+          curl -s https://api.github.com/repos/$REPO/contributors > contributors.json
+
+          echo "Building HTML grid..."
+
+          echo '<table><tr>' > contributors.html
+
+          COUNT=0
+          PER_ROW=6
+
+          jq -c '.[] | select(.type=="User")' contributors.json | while read user; do
+            LOGIN=$(echo $user | jq -r '.login')
+            AVATAR=$(echo $user | jq -r '.avatar_url')
+            URL="https://github.com/$LOGIN"
+
+            echo "<td align=\"center\">
+              <a href=\"$URL\">
+                <img src=\"$AVATAR\" width=\"100px;\" style=\"border-radius:50%;\"/><br />
+                <sub><b>$LOGIN</b></sub>
+              </a>
+            </td>" >> contributors.html
+
+            COUNT=$((COUNT+1))
+
+            if [ $((COUNT % PER_ROW)) -eq 0 ]; then
+              echo "</tr><tr>" >> contributors.html
+            fi
+          done
+
+          echo '</tr></table>' >> contributors.html
+
+          echo "Injecting into README..."
+
+          awk '
+          BEGIN {skip=0}
+          /<!-- CONTRIBUTORS:START -->/ {
+            print;
+            print "";
+            while ((getline line < "contributors.html") > 0) print line;
+            print "";
+            skip=1;
+            next
+          }
+          /<!-- CONTRIBUTORS:END -->/ {
+            skip=0;
+            print;
+            next
+          }
+          !skip {print}
+          ' README.md > README.tmp && mv README.tmp README.md
 
       - name: Check for changes
         id: changes
@@ -42,7 +89,7 @@ jobs:
           commit-message: 'docs(README): update contributors'
           title: 'docs: Update contributors list'
           body: 'Automated update of contributors list'
+          branch: update/contributors-list
           labels: |
             automated-pr
             documentation
-          branch: update/contributors-list

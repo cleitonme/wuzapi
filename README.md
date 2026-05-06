@@ -314,6 +314,7 @@ Check the [API Reference](https://github.com/asternic/wuzapi/blob/main/API.md)
 
 ## Contributors
 
+<!-- CONTRIBUTORS:START -->
 <table>
 <tr>
     <td align="center" style="word-wrap: break-word; width: 150.0; height: 150.0">
@@ -552,6 +553,7 @@ Check the [API Reference](https://github.com/asternic/wuzapi/blob/main/API.md)
     </td>
 </tr>
 </table>
+<!-- CONTRIBUTORS:END -->
 
 ## Clients
 
