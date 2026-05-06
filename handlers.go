@@ -2757,6 +2757,10 @@ func (s *server) SendPoll() http.HandlerFunc {
 			return
 		}
 
+		// Remember the plaintext options so incoming vote webhooks can
+		// resolve the hashed selections back to readable strings.
+		clientManager.SetPollOptions(txtid, msgid, req.Options)
+
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
