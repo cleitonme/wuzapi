@@ -333,7 +333,7 @@ func parseJID(arg string) (types.JID, bool) {
 // Returns DESKTOP as default if the string doesn't match any known type
 func getPlatformTypeEnum(platformType string) *waCompanionReg.DeviceProps_PlatformType {
 	platformType = strings.ToUpper(strings.TrimSpace(platformType))
-	
+
 	switch platformType {
 	case "UNKNOWN":
 		return waCompanionReg.DeviceProps_UNKNOWN.Enum()
@@ -863,6 +863,23 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		log.Info().Str("id", evt.Info.ID).Str("source", evt.Info.SourceString()).Str("parts", strings.Join(metaParts, ", ")).Msg("Message Received")
+
+		if encMessage := evt.Message.GetSecretEncryptedMessage(); encMessage != nil {
+			decrypted, derr := mycli.WAClient.DecryptSecretEncryptedMessage(context.Background(), evt)
+			if derr != nil {
+				log.Warn().
+					Err(derr).
+					Str("messageID", evt.Info.ID).
+					Str("secretEncType", encMessage.GetSecretEncType().String()).
+					Msg("DecryptSecretEncryptedMessage failed")
+			} else if decrypted != nil {
+				log.Info().
+					Str("messageID", evt.Info.ID).
+					Str("secretEncType", encMessage.GetSecretEncType().String()).
+					Msg("Decrypted secretEncryptedMessage; swapping evt.Message")
+				evt.Message = decrypted
+			}
+		}
 
 		if !*skipMedia {
 			// try to get Image if any
