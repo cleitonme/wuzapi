@@ -841,6 +841,48 @@ paths:
             application/json:
               schema:
                 example: { "code": 200, "data": { "5491122223333@s.whatsapp.net": { "BusinessName": "", "FirstName": "", "Found": true, "FullName": "", "PushName": "FOP2" }, "549113334444@s.whatsapp.net": { "BusinessName": "", "FirstName": "", "Found": true, "FullName": "", "PushName": "Asternic" } } }
+  /user/block:
+    post:
+      tags:
+        - User
+      summary: Block a WhatsApp user
+      description: Blocks a WhatsApp user and returns the updated blocklist.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/BlocklistUpdate'
+      responses:
+        200:
+          description: User blocked
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "User blocked", "JID": "5491155553935@s.whatsapp.net", "Blocklist": [ "5491155553935@s.whatsapp.net" ], "DHash": "1234567890" }, "success": true }
+  /user/unblock:
+    post:
+      tags:
+        - User
+      summary: Unblock a WhatsApp user
+      description: Unblocks a WhatsApp user and returns the updated blocklist.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/BlocklistUpdate'
+      responses:
+        200:
+          description: User unblocked
+          content:
+            application/json:
+              schema:
+                example: { "code": 200, "data": { "Details": "User unblocked", "JID": "5491155553935@s.whatsapp.net", "Blocklist": [], "DHash": "1234567891" }, "success": true }
   /user/lid/{phone}:
     get:
       tags:
@@ -2288,6 +2330,20 @@ definitions:
       type:
         type: string
         example: available
+  BlocklistUpdate:
+    type: object
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      JID:
+        type: string
+        example: "5491155553935@s.whatsapp.net"
+    oneOf:
+      - required:
+          - Phone
+      - required:
+          - JID
   MessageContact:
     type: object
     required: 
