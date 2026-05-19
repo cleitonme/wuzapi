@@ -637,6 +637,66 @@ Response:
 
 ---
 
+## Block User
+
+Blocks a WhatsApp user and returns the updated blocklist.
+
+Endpoint: _/user/block_
+
+Method: **POST**
+
+```
+curl -s -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Phone":"5491155554445"}' http://localhost:8080/user/block
+```
+
+Response:
+
+```json
+{
+  "code": 200,
+  "data": {
+    "Details": "User blocked",
+    "JID": "5491155554445@s.whatsapp.net",
+    "Blocklist": [
+      "5491155554445@s.whatsapp.net"
+    ],
+    "DHash": "1234567890"
+  },
+  "success": true
+}
+```
+
+---
+
+## Unblock User
+
+Unblocks a WhatsApp user and returns the updated blocklist.
+
+Endpoint: _/user/unblock_
+
+Method: **POST**
+
+```
+curl -s -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Phone":"5491155554445"}' http://localhost:8080/user/unblock
+```
+
+Response:
+
+```json
+{
+  "code": 200,
+  "data": {
+    "Details": "User unblocked",
+    "JID": "5491155554445@s.whatsapp.net",
+    "Blocklist": [],
+    "DHash": "1234567891"
+  },
+  "success": true
+}
+```
+
+---
+
 
 # Chat
 
