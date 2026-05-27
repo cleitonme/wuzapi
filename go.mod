@@ -12,7 +12,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20260525123251-933deb5f2ee9
+	go.mau.fi/whatsmeow v0.0.0-20260525144132-563bcaa0f632
 	google.golang.org/protobuf v1.36.11
 )
 
