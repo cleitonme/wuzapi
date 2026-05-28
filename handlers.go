@@ -1804,6 +1804,17 @@ func (s *server) SendButtons() http.HandlerFunc {
 		MerchantName string `json:"MerchantName"`
 		Key          string `json:"Key"`
 		KeyType      string `json:"KeyType"` // PHONE || EMAIL || CPF || EVP
+
+		// Personalizáveis — todos opcionais
+		Amount       *float64 `json:"Amount,omitempty"`       // valor em reais, ex: 49.90 (default: 0)
+		AmountOffset *int     `json:"AmountOffset,omitempty"` // multiplicador centavos (default: 100)
+		ReferenceID  string   `json:"ReferenceID,omitempty"`  // default: "PIX<timestamp>"
+		OrderType    string   `json:"OrderType,omitempty"`    // default: "ORDER"
+		GoodsType    string   `json:"GoodsType,omitempty"`    // default: "physical-goods"
+		ItemName     string   `json:"ItemName,omitempty"`     // nome do item na order
+		Title        string   `json:"Title,omitempty"`        // título do header da mensagem
+		Footer       string   `json:"Footer,omitempty"`       // rodapé da mensagem
+		Referral     string   `json:"Referral,omitempty"`     // default: "chat_attachment"
 	}
 
 	type buttonStruct struct {
@@ -1906,24 +1917,66 @@ func (s *server) SendButtons() http.HandlerFunc {
 			if btn.PixPayment != nil {
 				hasPix = true
 
-				zeroAmount := map[string]interface{}{"value": 0, "offset": 100}
-				referenceID := fmt.Sprintf("PIX%d", time.Now().UnixMilli())
+				// --- Amount ---
+				amountValue := 0.0
+				if btn.PixPayment.Amount != nil {
+					amountValue = *btn.PixPayment.Amount
+				}
+				offset := 100
+				if btn.PixPayment.AmountOffset != nil {
+					offset = *btn.PixPayment.AmountOffset
+				}
+				totalAmount := map[string]interface{}{"value": amountValue, "offset": offset}
+
+				// --- Reference ID ---
+				referenceID := btn.PixPayment.ReferenceID
+				if referenceID == "" {
+					referenceID = fmt.Sprintf("PIX%d", time.Now().UnixMilli())
+				}
+
+				// --- Order type / goods type ---
+				goodsType := btn.PixPayment.GoodsType
+				if goodsType == "" {
+					goodsType = "physical-goods"
+				}
+				orderType := btn.PixPayment.OrderType
+				if orderType == "" {
+					orderType = "ORDER"
+				}
+
+				// --- Item name ---
+				itemName := btn.PixPayment.ItemName
+				// pode ficar vazio, igual ao original
+
+				// --- Referral ---
+				referral := btn.PixPayment.Referral
+				if referral == "" {
+					referral = "chat_attachment"
+				}
+
+				// --- Título / Footer (sobrescreve campos raiz se informados no PixPayment) ---
+				if btn.PixPayment.Title != "" && t.Title == "" {
+					t.Title = btn.PixPayment.Title
+				}
+				if btn.PixPayment.Footer != "" && footer == "" {
+					footer = btn.PixPayment.Footer
+				}
 
 				paramsJSON, err := json.Marshal(map[string]interface{}{
 					"currency":     "BRL",
-					"total_amount": zeroAmount,
+					"total_amount": totalAmount,
 					"reference_id": referenceID,
-					"type":         "physical-goods",
+					"type":         goodsType,
 					"order": map[string]interface{}{
 						"status":     "pending",
-						"subtotal":   zeroAmount,
-						"order_type": "ORDER",
+						"subtotal":   totalAmount,
+						"order_type": orderType,
 						"items": []map[string]interface{}{
 							{
-								"name":        "",
-								"amount":      zeroAmount,
+								"name":        itemName,
+								"amount":      totalAmount,
 								"quantity":    0,
-								"sale_amount": zeroAmount,
+								"sale_amount": totalAmount,
 							},
 						},
 					},
@@ -1939,7 +1992,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 					},
 					"share_payment_status": false,
 					"is_soft_deleted":      false,
-					"referral":             "chat_attachment",
+					"referral":             referral,
 				})
 				if err != nil {
 					log.Error().Err(err).Msg("Failed to marshal PIX button params")
