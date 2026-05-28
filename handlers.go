@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -1840,8 +1841,9 @@ func (s *server) SendButtons() http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		client := clientManager.GetWhatsmeowClient(txtid)
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
@@ -1890,7 +1892,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 		// --- Mensagem ID ---
 		msgid := t.Id
 		if msgid == "" {
-			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
+			msgid = client.GenerateMessageID()
 		}
 
 		// --- Parse de Botões ---
@@ -2045,12 +2047,58 @@ func (s *server) SendButtons() http.HandlerFunc {
 			return
 		}
 
+		// --- Upload de Imagem (Header) ---
+		var imgMsg *waE2E.ImageMessage
+		if t.Image != "" {
+			var filedata []byte
+
+			if len(t.Image) > 10 && t.Image[:10] == "data:image" {
+				// Base64 data URL
+				if du, decErr := dataurl.DecodeString(t.Image); decErr == nil {
+					filedata = du.Data
+				}
+			} else if strings.HasPrefix(t.Image, "http://") || strings.HasPrefix(t.Image, "https://") {
+				// URL remota
+				httpResp, fetchErr := http.Get(t.Image)
+				if fetchErr == nil {
+					defer httpResp.Body.Close()
+					filedata, _ = io.ReadAll(httpResp.Body)
+				}
+			}
+
+			if len(filedata) > 0 {
+				uploaded, uploadErr := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+				if uploadErr == nil {
+					imgMsg = &waE2E.ImageMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String(http.DetectContentType(filedata)),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(filedata))),
+					}
+				} else {
+					log.Error().Err(uploadErr).Msg("Failed to upload button header image")
+				}
+			}
+		}
+
+		// --- Construção do Header ---
+		header := &waE2E.InteractiveMessage_Header{}
+		if imgMsg != nil {
+			header.HasMediaAttachment = proto.Bool(true)
+			header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{ImageMessage: imgMsg}
+		} else {
+			header.HasMediaAttachment = proto.Bool(false)
+			if t.Title != "" {
+				header.Title = proto.String(t.Title)
+			}
+		}
+
 		// --- Construção da InteractiveMessage ---
 		interactiveMsg := &waE2E.InteractiveMessage{
-			Header: &waE2E.InteractiveMessage_Header{
-				Title:              proto.String(t.Title),
-				HasMediaAttachment: proto.Bool(false),
-			},
+			Header: header,
 			Body: &waE2E.InteractiveMessage_Body{
 				Text: proto.String(body),
 			},
@@ -2105,7 +2153,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 
 		// --- Envio ---
 		var resp whatsmeow.SendResponse
-		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(
+		resp, err := client.SendMessage(
 			context.Background(),
 			recipient,
 			finalMsg,
