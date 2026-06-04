@@ -12,7 +12,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20260529101937-a7ea56383ec4
+	go.mau.fi/whatsmeow v0.0.0-20260604205742-c6a4b703e48f
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -72,4 +72,4 @@ require (
 )
 
 //🔥 IMPORTANTE: Substitui o whatsmeow original pelo private-meow com suporte a botões/listas
-replace go.mau.fi/whatsmeow => github.com/cleitonme/whatsmeow wuzapi2805
+replace go.mau.fi/whatsmeow => github.com/cleitonme/whatsmeow wuzapi0406
