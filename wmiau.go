@@ -855,6 +855,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
+    log.Info().
+        Str("chat", evt.Info.Chat.String()).
+        Str("sender", evt.Info.Sender.String()).
+        Str("id", evt.Info.ID).
+        Bool("isGroup", evt.Info.IsGroup).
+        Bool("isFromMe", evt.Info.IsFromMe).
+        Msg("RAW Message recebida")
 		// Ignorar status newsletters
 		chatStr := evt.Info.Chat.String()
 		if strings.Contains(chatStr, "@newsletter") {
