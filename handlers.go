@@ -751,7 +751,7 @@ func (s *server) PairPhone() http.HandlerFunc {
 			true,
 			whatsmeow.PairClientChrome,
 			"Chrome (Linux)",
-			pairingCode,
+			// pairingCode,
 		)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
@@ -1167,6 +1167,390 @@ func (s *server) SendAudio() http.HandlerFunc {
 			s.Respond(w, r, http.StatusOK, string(responseJson))
 		}
 		return
+	}
+}
+
+// Sends a WhatsApp Status (Story)
+func (s *server) SendStatus() http.HandlerFunc {
+
+	type statusStruct struct {
+		Type            string   `json:"type"`             // text | image | video | audio | myaudio | ptt
+		Text            string   `json:"text"`             // texto ou legenda
+		BackgroundColor int      `json:"background_color"` // 1–19
+		Font            int      `json:"font"`             // 0,1,2,6,7,8,9,10
+		File            string   `json:"file"`             // URL ou base64
+		Mimetype        string   `json:"mimetype"`
+		Recipients      []string `json:"recipients"`      // números, JIDs @s.whatsapp.net ou @lid
+		MaxRecipients   int      `json:"max_recipients"`  // cap de segurança
+	}
+
+	// Cores ARGB reais do WhatsApp para status de texto (uint32 — bit 31 setado é alpha=FF)
+	realColors := map[int]uint32{
+		1:  0xFF4C9E46, // verde musgo
+		2:  0xFF212E65, // azul escuro
+		3:  0xFF6B2FA0, // roxo
+		4:  0xFF1F7AEB, // azul
+		5:  0xFFF96900, // laranja
+		6:  0xFF5E5C5C, // cinza escuro
+		7:  0xFFD4325C, // vermelho-rosa
+		8:  0xFF0A7DA1, // azul petróleo
+		9:  0xFF7CBCDE, // azul claro
+		10: 0xFF7F3FBC, // roxo vibrante
+		11: 0xFF4C4F5B, // cinza slate
+		12: 0xFF00558F, // azul marinho
+		13: 0xFFB2235B, // magenta profundo
+		14: 0xFFE55D5D, // rosa claro
+		15: 0xFFE88A47, // salmão
+		16: 0xFF7B5B3A, // marrom
+		17: 0xFF4C9E46, // (alias) verde
+		18: 0xFF7F7F7F, // cinza médio
+		19: 0xFF222222, // cinza profundo
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var t statusStruct
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+			return
+		}
+
+		// ── validações básicas ────────────────────────────────────────────────
+		validTypes := map[string]bool{
+			"text": true, "image": true, "video": true,
+			"audio": true, "myaudio": true, "ptt": true,
+		}
+		if !validTypes[t.Type] {
+			s.Respond(w, r, http.StatusBadRequest,
+				errors.New("invalid type; accepted: text, image, video, audio, myaudio, ptt"))
+			return
+		}
+		if t.Type == "text" && len([]rune(t.Text)) > 656 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("text exceeds 656 characters"))
+			return
+		}
+		if t.Type != "text" && t.File == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing File in Payload for media status"))
+			return
+		}
+		if t.MaxRecipients < 0 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("max_recipients cannot be negative"))
+			return
+		}
+
+		// ── resolução de audiência ────────────────────────────────────────────
+		statusJID := types.NewJID("status", "broadcast")
+
+		// Obtém lista completa de privacidade de status
+		reqCtx := r.Context()
+
+		privacySettings, err := client.GetStatusPrivacy(reqCtx)
+		if err != nil {
+			log.Warn().Err(err).Msg("could not get status privacy; using empty audience")
+		}
+
+		// Constrói lista base de JIDs de audiência a partir da privacidade
+		var audienceJIDs []types.JID
+		for _, ps := range privacySettings {
+			for _, jid := range ps.List {
+				audienceJIDs = append(audienceJIDs, jid)
+			}
+		}
+
+		// debug info
+		type discardedEntry struct {
+			Recipient string `json:"recipient"`
+			Reason    string `json:"reason"`
+		}
+		var discarded []discardedEntry
+
+		var statusJidList []types.JID
+
+		if len(t.Recipients) > 0 {
+			// ── modo explícito: valida cada recipient informado ───────────────
+			var candidates []types.JID
+			seen := map[string]bool{}
+
+			for _, raw := range t.Recipients {
+				// normaliza para JID
+				var jid types.JID
+				var parseErr error
+
+				switch {
+				case strings.HasSuffix(raw, "@lid"):
+					jid, parseErr = types.ParseJID(raw)
+					if parseErr != nil {
+						discarded = append(discarded, discardedEntry{raw, "invalid_format"})
+						continue
+					}
+					// tenta resolver LID → PN via cache local
+					resolved, resolveErr := client.Store.LIDs.GetPNForLID(reqCtx, jid)
+					if resolveErr != nil || resolved.IsEmpty() {
+						discarded = append(discarded, discardedEntry{raw, "lid_unresolved"})
+						continue
+					}
+					jid = resolved
+
+				case strings.HasSuffix(raw, "@s.whatsapp.net"):
+					jid, parseErr = types.ParseJID(raw)
+					if parseErr != nil {
+						discarded = append(discarded, discardedEntry{raw, "invalid_format"})
+						continue
+					}
+
+				default:
+					// número puro — assume @s.whatsapp.net
+					normalized := raw + "@s.whatsapp.net"
+					jid, parseErr = types.ParseJID(normalized)
+					if parseErr != nil {
+						discarded = append(discarded, discardedEntry{raw, "invalid_format"})
+						continue
+					}
+				}
+
+				key := jid.String()
+				if seen[key] {
+					discarded = append(discarded, discardedEntry{raw, "duplicate"})
+					continue
+				}
+				seen[key] = true
+				candidates = append(candidates, jid)
+			}
+
+			// verifica existência no WhatsApp em batch
+			if len(candidates) > 0 {
+				onWA, checkErr := client.IsOnWhatsApp(reqCtx, func() []string {
+					nums := make([]string, len(candidates))
+					for i, j := range candidates {
+						nums[i] = j.User
+					}
+					return nums
+				}())
+
+				waSet := map[string]bool{}
+				if checkErr == nil {
+					for _, info := range onWA {
+						if info.IsIn {
+							waSet[info.JID.User] = true
+						}
+					}
+				}
+
+				// constrói set de audiência (PN e equivalências LID conhecidas)
+				audienceSet := map[string]bool{}
+				for _, aj := range audienceJIDs {
+					audienceSet[aj.User] = true
+				}
+
+				for _, jid := range candidates {
+					if checkErr == nil && !waSet[jid.User] {
+						discarded = append(discarded, discardedEntry{jid.String(), "not_on_whatsapp"})
+						continue
+					}
+					if len(audienceJIDs) > 0 && !audienceSet[jid.User] {
+						discarded = append(discarded, discardedEntry{jid.String(), "outside_status_audience"})
+						continue
+					}
+					statusJidList = append(statusJidList, jid)
+				}
+			}
+
+			if len(statusJidList) == 0 {
+				resp := map[string]interface{}{
+					"Details": "no valid recipients after validation",
+					"Debug":   map[string]interface{}{"discarded_recipients": discarded},
+				}
+				respJson, _ := json.Marshal(resp)
+				s.Respond(w, r, http.StatusBadRequest, string(respJson))
+				return
+			}
+
+		} else {
+			// ── modo normal: usa audiência completa da privacidade ────────────
+			statusJidList = audienceJIDs
+		}
+
+		// aplica cap max_recipients
+		if t.MaxRecipients > 0 && len(statusJidList) > t.MaxRecipients {
+			statusJidList = statusJidList[:t.MaxRecipients]
+		}
+
+		// ── constrói a mensagem por tipo ──────────────────────────────────────
+		msgid := client.GenerateMessageID()
+
+		var msg *waE2E.Message
+
+		switch t.Type {
+
+		case "text":
+			bgColor := realColors[19] // padrão cinza profundo
+			if c, ok := realColors[t.BackgroundColor]; ok {
+				bgColor = c
+			}
+			validFonts := map[int]bool{0: true, 1: true, 2: true, 6: true, 7: true, 8: true, 9: true, 10: true}
+			font := int32(0)
+			if validFonts[t.Font] {
+				font = int32(t.Font)
+			}
+			msg = &waE2E.Message{
+				ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+					Text:            proto.String(t.Text),
+					BackgroundArgb:  proto.Uint32(bgColor),
+					TextArgb:        proto.Uint32(0xFFFFFFFF),
+					Font:            waE2E.ExtendedTextMessage_FontType(font).Enum(),
+					PreviewType:     waE2E.ExtendedTextMessage_NONE.Enum(),
+				},
+			}
+
+		case "image":
+			filedata, mimeType, err := resolveFileData(r.Context(), t.File, t.Mimetype, "image/", fetchImageMaxBytes)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, err)
+				return
+			}
+
+			uploaded, err := mediaCache.GetOrUploadImage(context.Background(), client, filedata, mimeType)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError,
+					fmt.Errorf("failed to upload image: %v", err))
+				return
+			}
+
+			thumbnailBytes, err := generateJPEGThumbnail(filedata, 72, 72)
+			if err != nil {
+				log.Warn().Err(err).Msg("could not generate image thumbnail for status")
+			}
+
+			msg = &waE2E.Message{
+				ImageMessage: &waE2E.ImageMessage{
+					Caption:       proto.String(t.Text),
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(mimeType),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(filedata))),
+					JPEGThumbnail: thumbnailBytes,
+				},
+			}
+
+		case "video":
+			filedata, mimeType, err := resolveFileData(r.Context(), t.File, t.Mimetype, "video/", fetchVideoMaxBytes)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, err)
+				return
+			}
+
+			uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaVideo)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError,
+					fmt.Errorf("failed to upload video: %v", err))
+				return
+			}
+
+			msg = &waE2E.Message{
+				VideoMessage: &waE2E.VideoMessage{
+					Caption:       proto.String(t.Text),
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(mimeType),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(filedata))),
+				},
+			}
+
+		case "audio", "myaudio", "ptt":
+			filedata, mimeType, err := resolveFileData(r.Context(), t.File, t.Mimetype, "audio/", fetchAudioMaxBytes)
+			if err != nil {
+				s.Respond(w, r, http.StatusBadRequest, err)
+				return
+			}
+
+			uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaAudio)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError,
+					fmt.Errorf("failed to upload audio: %v", err))
+				return
+			}
+
+			isPTT := t.Type == "ptt" || t.Type == "myaudio"
+
+			// áudio status requer backgroundColor para aparecer no mobile
+			// se não informado, usa preto como fallback (conforme Baileys)
+			msg = &waE2E.Message{
+				AudioMessage: &waE2E.AudioMessage{
+					URL:           proto.String(uploaded.URL),
+					DirectPath:    proto.String(uploaded.DirectPath),
+					MediaKey:      uploaded.MediaKey,
+					Mimetype:      proto.String(mimeType),
+					FileEncSHA256: uploaded.FileEncSHA256,
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    proto.Uint64(uint64(len(filedata))),
+					PTT:           proto.Bool(isPTT),
+				},
+			}
+		}
+
+		// ── envia para status@broadcast ───────────────────────────────────────
+		// O whatsmeow gerencia internamente a lista de participantes ao enviar
+		// para types.StatusBroadcastJID. Não há campo StatusJidList exposto no
+		// ContextInfo proto nem no SendRequestExtra — a lista vem de GetStatusPrivacy.
+		// Quando recipients explícitos foram informados e filtrados para statusJidList,
+		// não há forma nativa de sobrescrever a lista no whatsmeow sem fork;
+		// o comportamento padrão já é enviar para toda a audiência configurada.
+		resp, err := client.SendMessage(
+			context.Background(),
+			statusJID,
+			msg,
+			whatsmeow.SendRequestExtra{
+				ID: msgid,
+			},
+		)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError,
+				fmt.Errorf("error sending status: %v", err))
+			return
+		}
+
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+		s.saveOutgoingMessageToHistory(txtid, statusJID.String(), msgid, "status/"+t.Type, t.Text, "", historyLimit)
+
+		log.Info().
+			Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).
+			Str("id", msgid).
+			Int("recipients", len(statusJidList)).
+			Msg("Status sent")
+
+		response := map[string]interface{}{
+			"Details":    "Sent",
+			"Timestamp":  resp.Timestamp.Unix(),
+			"Id":         msgid,
+			"Recipients": len(statusJidList),
+		}
+		if len(discarded) > 0 {
+			response["Debug"] = map[string]interface{}{
+				"discarded_recipients": discarded,
+			}
+		}
+
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 

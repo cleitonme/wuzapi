@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -1078,4 +1079,65 @@ func buildContextInfo(
 	}
 
 	return ci
+}
+
+// generateJPEGThumbnail redimensiona para wxh e retorna JPEG bytes.
+func generateJPEGThumbnail(data []byte, w, h uint) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	m := resize.Thumbnail(w, h, img, resize.Lanczos3)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, m, nil); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// resolveFileData aceita base64 data-URL ou HTTP URL e retorna os bytes + mimeType.
+func resolveFileData(ctx context.Context, file, mimeHint, mimePrefix string, maxBytes int64) ([]byte, string, error) {
+	var filedata []byte
+	var mimeType string
+
+	switch {
+	case strings.HasPrefix(file, "data:"):
+		dataURL, err := dataurl.DecodeString(file)
+		if err != nil {
+			return nil, "", errors.New("could not decode base64 encoded data from payload")
+		}
+		filedata = dataURL.Data
+		mimeType = dataURL.MediaType.ContentType()
+
+	case isHTTPURL(file):
+		data, ct, err := fetchURLBytes(ctx, file, maxBytes)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to fetch file from url: %v", err)
+		}
+		filedata = data
+		mimeType = ct
+		if mimePrefix != "" && !strings.HasPrefix(strings.ToLower(mimeType), mimePrefix) {
+			// fallback baseado no prefixo esperado
+			switch mimePrefix {
+			case "image/":
+				mimeType = "image/jpeg"
+			case "video/":
+				mimeType = "video/mp4"
+			case "audio/":
+				mimeType = "audio/ogg; codecs=opus"
+			}
+		}
+
+	default:
+		return nil, "", fmt.Errorf("file must be a base64 data-URL or HTTP URL")
+	}
+
+	if mimeHint != "" {
+		mimeType = mimeHint
+	}
+	if mimeType == "" {
+		mimeType = http.DetectContentType(filedata)
+	}
+
+	return filedata, mimeType, nil
 }
