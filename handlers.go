@@ -27,6 +27,7 @@ import (
 	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
 	waBinary "go.mau.fi/whatsmeow/binary"
+	waSyncAction "go.mau.fi/whatsmeow/proto/waSyncAction"
 
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -1180,8 +1181,8 @@ func (s *server) SendStatus() http.HandlerFunc {
 		Font            int      `json:"font"`             // 0,1,2,6,7,8,9,10
 		File            string   `json:"file"`             // URL ou base64
 		Mimetype        string   `json:"mimetype"`
-		Recipients      []string `json:"recipients"`      // números, JIDs @s.whatsapp.net ou @lid
-		MaxRecipients   int      `json:"max_recipients"`  // cap de segurança
+		Recipients      []string `json:"recipients"`     // números, JIDs @s.whatsapp.net ou @lid
+		MaxRecipients   int      `json:"max_recipients"` // cap de segurança
 	}
 
 	// Cores ARGB reais do WhatsApp para status de texto (uint32 — bit 31 setado é alpha=FF)
@@ -1402,11 +1403,11 @@ func (s *server) SendStatus() http.HandlerFunc {
 			}
 			msg = &waE2E.Message{
 				ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-					Text:            proto.String(t.Text),
-					BackgroundArgb:  proto.Uint32(bgColor),
-					TextArgb:        proto.Uint32(0xFFFFFFFF),
-					Font:            waE2E.ExtendedTextMessage_FontType(font).Enum(),
-					PreviewType:     waE2E.ExtendedTextMessage_NONE.Enum(),
+					Text:           proto.String(t.Text),
+					BackgroundArgb: proto.Uint32(bgColor),
+					TextArgb:       proto.Uint32(0xFFFFFFFF),
+					Font:           waE2E.ExtendedTextMessage_FontType(font).Enum(),
+					PreviewType:    waE2E.ExtendedTextMessage_NONE.Enum(),
 				},
 			}
 
@@ -7212,5 +7213,119 @@ func (s *server) GetWhatsAppStatus() http.HandlerFunc {
 		}
 
 		s.Respond(w, r, http.StatusOK, string(jsonResp))
+	}
+}
+
+// AddContact salva um contato na agenda do WhatsApp via app state sync.
+//
+// MutationInfo tem apenas Index, Version e Value (*waSyncAction.SyncActionValue)
+// — sem campo Operation. O SET é o default do patch.
+//
+// POST /contact/add
+// Body: { "phone": "5511999990001", "name": "João Silva", "first_name": "João" }
+func (s *server) AddContact() http.HandlerFunc {
+
+	type addContactRequest struct {
+		Phone     string `json:"phone"`
+		Name      string `json:"name"`
+		FirstName string `json:"first_name"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var t addContactRequest
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+			return
+		}
+
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing phone in Payload"))
+			return
+		}
+		if t.Name == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing name in Payload"))
+			return
+		}
+
+		// normaliza número → JID
+		phone := strings.TrimPrefix(t.Phone, "+")
+		phone = strings.ReplaceAll(phone, " ", "")
+		phone = strings.ReplaceAll(phone, "-", "")
+
+		var jid types.JID
+		if strings.Contains(phone, "@") {
+			var parseErr error
+			jid, parseErr = types.ParseJID(phone)
+			if parseErr != nil {
+				s.Respond(w, r, http.StatusBadRequest,
+					fmt.Errorf("invalid JID format: %v", parseErr))
+				return
+			}
+		} else {
+			jid = types.NewJID(phone, types.DefaultUserServer)
+		}
+
+		firstName := t.FirstName
+		if firstName == "" {
+			parts := strings.SplitN(t.Name, " ", 2)
+			firstName = parts[0]
+		}
+
+		ts := time.Now().Unix()
+
+		patch := appstate.PatchInfo{
+			Type: appstate.WAPatchCriticalUnblockLow,
+			Mutations: []appstate.MutationInfo{
+				{
+					Index:   []string{appstate.IndexContact, jid.String()},
+					Version: 3,
+					Value: &waSyncAction.SyncActionValue{
+						Timestamp: proto.Int64(ts),
+						ContactAction: &waSyncAction.ContactAction{
+							FullName:  proto.String(t.Name),
+							FirstName: proto.String(firstName),
+						},
+					},
+				},
+			},
+		}
+
+		if err := client.SendAppState(r.Context(), patch); err != nil {
+			s.Respond(w, r, http.StatusInternalServerError,
+				fmt.Errorf("failed to sync contact to WhatsApp: %v", err))
+			return
+		}
+
+		// persiste no store local para leitura imediata
+		if err := client.Store.Contacts.PutContactName(r.Context(), jid, t.Name, firstName); err != nil {
+			log.Warn().Err(err).Str("jid", jid.String()).Msg("contact synced to WA but failed to save locally")
+		}
+
+		log.Info().
+			Str("jid", jid.String()).
+			Str("name", t.Name).
+			Msg("Contact added via app state")
+
+		response := map[string]interface{}{
+			"Details":   "Contact saved",
+			"JID":       jid.String(),
+			"Name":      t.Name,
+			"FirstName": firstName,
+		}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
