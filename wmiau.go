@@ -855,13 +855,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
-		// Ignorar status broadcast e newsletters
+		// Ignorar status newsletters
 		chatStr := evt.Info.Chat.String()
-		if evt.Info.Chat.Server == "broadcast" || strings.Contains(chatStr, "@newsletter") {
+		if strings.Contains(chatStr, "@newsletter") {
 			log.Debug().
 				Str("chat", chatStr).
 				Str("id", evt.Info.ID).
-				Msg("Message ignorada (status@broadcast / newsletter)")
+				Msg("Message ignorada (newsletter)")
 			return
 		}
 
