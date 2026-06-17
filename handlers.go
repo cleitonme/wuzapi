@@ -1504,14 +1504,41 @@ func (s *server) SendStatus() http.HandlerFunc {
 		}
 
 		// ── envia para status@broadcast ───────────────────────────────────────
-		// O whatsmeow gerencia internamente a lista de participantes ao enviar
-		// para types.StatusBroadcastJID. Não há campo StatusJidList exposto no
-		// ContextInfo proto nem no SendRequestExtra — a lista vem de GetStatusPrivacy.
-		// Quando recipients explícitos foram informados e filtrados para statusJidList,
-		// não há forma nativa de sobrescrever a lista no whatsmeow sem fork;
-		// o comportamento padrão já é enviar para toda a audiência configurada.
+		// O send.go do whatsmeow chama GetUserDevicesContext para todos os contatos
+		// da audiencia de uma vez. Apos restart o cache de devices esta vazio,
+		// causando um usync gigante que bate no timeout de 75s do IQ.
+		//
+		// Solucao: usar DangerousInternalClient.GetStatusBroadcastRecipients para
+		// buscar a lista de destinatarios e pre-popular o cache antes do SendMessage.
+		// O whatsmeow cacheia o resultado de GetUserDevicesContext por 24h.
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer sendCancel()
+
+		// Pre-warm: busca a lista completa de destinatarios do status e popula
+		// o cache de devices de todos eles antes de chamar SendMessage.
+		// Assim o usync interno encontra tudo em cache e nao vai a rede.
+		recipients, recipErr := client.DangerousInternals().GetStatusBroadcastRecipients(sendCtx)
+		if recipErr != nil {
+			log.Warn().Err(recipErr).Msg("could not get status recipients for pre-warm; sending anyway")
+		} else if len(recipients) > 0 {
+			// GetUserDevicesContext aceita ate ~250 JIDs por chamada (limite do usync).
+			// Para agendas grandes, divide em batches de 100.
+			batchSize := 100
+			for i := 0; i < len(recipients); i += batchSize {
+				end := i + batchSize
+				if end > len(recipients) {
+					end = len(recipients)
+				}
+				batch := recipients[i:end]
+				if _, err := client.GetUserDevicesContext(sendCtx, batch); err != nil {
+					log.Warn().Err(err).Int("batch_start", i).Msg("pre-warm batch failed")
+					break
+				}
+			}
+		}
+
 		resp, err := client.SendMessage(
-			context.Background(),
+			sendCtx,
 			statusJID,
 			msg,
 			whatsmeow.SendRequestExtra{
