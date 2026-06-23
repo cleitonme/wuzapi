@@ -72,4 +72,4 @@ require (
 )
 
 //🔥 IMPORTANTE: Substitui o whatsmeow original pelo private-meow com suporte a botões/listas
-replace go.mau.fi/whatsmeow => github.com/cleitonme/whatsmeow wuzapi0406
+replace go.mau.fi/whatsmeow => github.com/jobasfernandes/whatsmeow integration/gomib-v1
