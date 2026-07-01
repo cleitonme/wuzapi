@@ -86,6 +86,12 @@ func (s *server) routes() {
 	s.router.Handle("/session/pairphone", c.Then(s.PairPhone())).Methods("POST")
 	s.router.Handle("/session/history", c.Then(s.RequestHistorySync())).Methods("GET")
 
+	// Session import/export endpoints
+	s.router.Handle("/session/import", c.Then(s.ImportSession())).Methods("POST")
+	s.router.Handle("/session/importRaw", c.Then(s.ImportRawSession())).Methods("POST")
+	s.router.Handle("/session/export", c.Then(s.ExportSession())).Methods("GET")
+	s.router.Handle("/session/importStatus", c.Then(s.GetImportStatus())).Methods("GET")
+
 	s.router.Handle("/webhook", c.Then(s.SetWebhook())).Methods("POST")
 	s.router.Handle("/webhook", c.Then(s.GetWebhook())).Methods("GET")
 	s.router.Handle("/webhook", c.Then(s.DeleteWebhook())).Methods("DELETE")

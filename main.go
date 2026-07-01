@@ -73,9 +73,14 @@ var (
 
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
-	userinfocache = cache.New(1*time.Hour, 30*time.Minute)
+	userinfocache    = cache.New(1*time.Hour, 30*time.Minute)
 	lastMessageCache = cache.New(24*time.Hour, 24*time.Hour)
 	globalHTTPClient = newSafeHTTPClient()
+
+	// whatsmeowStoreDB is a direct connection to the whatsmeow session database.
+	// For PostgreSQL this is the same DB as s.db but with its own connection.
+	// For SQLite this is a connection to dbdata/main.db (separate from users.db).
+	whatsmeowStoreDB *sqlx.DB
 )
 
 var privateIPBlocks []*net.IPNet
@@ -432,6 +437,17 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Error creating sqlstore")
 		os.Exit(1)
+	}
+
+	// Initialize direct connection to whatsmeow store DB for session import/export.
+	if config.Type == "postgres" {
+		whatsmeowStoreDB, err = sqlx.Open("postgres", storeConnStr)
+	} else {
+		whatsmeowStoreDB, err = sqlx.Open("sqlite", storeConnStr)
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to open whatsmeow store DB for session import (import feature disabled)")
+		whatsmeowStoreDB = nil
 	}
 
 	// Initialize the schema
