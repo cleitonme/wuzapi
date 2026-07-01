@@ -85,7 +85,7 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.17"
+const version = "1.0.18"
 
 func newSafeHTTPClient() *http.Client {
 	return &http.Client{
