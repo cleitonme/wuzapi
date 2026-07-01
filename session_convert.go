@@ -132,15 +132,23 @@ func detectFormat(data []byte) importFormat {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return formatUnknown
 	}
-	// wa-web dumps have a "device" top-level key
+	// Full wa-web dump: has "device" top-level key
 	if _, ok := m["device"]; ok {
 		return formatWaWeb
 	}
-	// Baileys creds have "noiseKey" or "signedIdentityKey"
-	if _, ok := m["noiseKey"]; ok {
+	// Bare wa-web device object: has "identityKey" or "meJid" (wa-web uses privKey/pubKey fields)
+	// Baileys uses "signedIdentityKey" (not "identityKey") and "me" (not "meJid")
+	if _, ok := m["identityKey"]; ok {
+		return formatWaWeb
+	}
+	if _, ok := m["meJid"]; ok {
+		return formatWaWeb
+	}
+	// Baileys creds have "signedIdentityKey" or "noiseKey" with public/private fields
+	if _, ok := m["signedIdentityKey"]; ok {
 		return formatBaileys
 	}
-	if _, ok := m["signedIdentityKey"]; ok {
+	if _, ok := m["noiseKey"]; ok {
 		return formatBaileys
 	}
 	return formatUnknown
@@ -154,6 +162,15 @@ func convertWaWebDump(data []byte) (*SessionCredentials, error) {
 	var dump waWebDump
 	if err := json.Unmarshal(data, &dump); err != nil {
 		return nil, fmt.Errorf("wa-web dump: %w", err)
+	}
+
+	// If "device" wrapper is absent, the data IS the device object directly
+	if dump.Device.MeJID == "" && dump.Device.RegistrationID == 0 {
+		var dev waWebDevice
+		if err := json.Unmarshal(data, &dev); err != nil {
+			return nil, fmt.Errorf("wa-web device: %w", err)
+		}
+		dump.Device = dev
 	}
 
 	d := dump.Device

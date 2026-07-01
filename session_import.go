@@ -121,24 +121,47 @@ func (s *server) ImportRawSession() http.HandlerFunc {
 			return
 		}
 
-		var req rawRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
-			return
-		}
-
-		if len(req.Creds) == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing 'creds' field"))
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxImportFileSize))
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("reading body: %w", err))
 			return
 		}
 
 		setImportStatus(txtid, importStatus{Status: "importing", Message: "Converting credentials..."})
 
-		creds, err := convertBaileysJSON(req.Creds, req.Keys)
-		if err != nil {
-			setImportStatus(txtid, importStatus{Status: "error", Message: err.Error()})
-			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("conversion error: %w", err))
-			return
+		var creds *SessionCredentials
+
+		// Accept wa-web dump format ({device,...}) directly, in addition to Baileys {creds,keys}
+		if detectFormat(body) == formatWaWeb {
+			creds, err = convertWaWebDump(body)
+			if err != nil {
+				setImportStatus(txtid, importStatus{Status: "error", Message: err.Error()})
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("conversion error: %w", err))
+				return
+			}
+		} else {
+			var req rawRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+				return
+			}
+
+			if len(req.Creds) == 0 {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("missing 'creds' field (or unrecognized format)"))
+				return
+			}
+
+			// creds field may itself be a wa-web dump (e.g. {"creds":{device:...}})
+			if detectFormat(req.Creds) == formatWaWeb {
+				creds, err = convertWaWebDump(req.Creds)
+			} else {
+				creds, err = convertBaileysJSON(req.Creds, req.Keys)
+			}
+			if err != nil {
+				setImportStatus(txtid, importStatus{Status: "error", Message: err.Error()})
+				s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("conversion error: %w", err))
+				return
+			}
 		}
 
 		if err := validateCredentials(creds); err != nil {
