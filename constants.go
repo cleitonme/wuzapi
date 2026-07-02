@@ -23,6 +23,7 @@ var supportedEventTypes = []string{
 	"KeepAliveRestored",
 	"KeepAliveTimeout",
 	"QRTimeout",
+	"PasskeyRequest",
 	"LoggedOut",
 	"ClientOutdated",
 	"TemporaryBan",

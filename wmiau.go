@@ -610,6 +610,13 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 							userinfocache.Set(token, v, cache.NoExpiration)
 						}
 					}
+				} else if evt.Event == "passkey-request" {
+					log.Warn().Str("userID", userID).Msg("WhatsApp is requiring passkey authentication for this account. Passkey pairing is not supported.")
+					postmap := make(map[string]interface{})
+					postmap["event"] = evt.Event
+					postmap["type"] = "PasskeyRequest"
+					postmap["error"] = "WhatsApp requires passkey authentication for this account, which is not supported."
+					sendEventWithWebHook(&mycli, postmap, "")
 				} else {
 					log.Info().Str("event", evt.Event).Msg("Login event")
 				}
@@ -855,13 +862,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
-    log.Info().
-        Str("chat", evt.Info.Chat.String()).
-        Str("sender", evt.Info.Sender.String()).
-        Str("id", evt.Info.ID).
-        Bool("isGroup", evt.Info.IsGroup).
-        Bool("isFromMe", evt.Info.IsFromMe).
-        Msg("RAW Message recebida")
+		log.Info().
+			Str("chat", evt.Info.Chat.String()).
+			Str("sender", evt.Info.Sender.String()).
+			Str("id", evt.Info.ID).
+			Bool("isGroup", evt.Info.IsGroup).
+			Bool("isFromMe", evt.Info.IsFromMe).
+			Msg("RAW Message recebida")
 		// Ignorar status newsletters
 		chatStr := evt.Info.Chat.String()
 		if strings.Contains(chatStr, "@newsletter") {
@@ -1549,7 +1556,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		dowebhook = 1
 		log.Info().Str("info", evt.Info.SourceString()).Msg("Facebook message received")
 	default:
-		log.Warn().Str("event", fmt.Sprintf("%+v", evt)).Msg("Unhandled event")
+		log.Debug().
+			Str("type", fmt.Sprintf("%T", evt)).
+			Str("event", fmt.Sprintf("%+v", evt)).
+			Msg("Unhandled event")
 	}
 
 	if dowebhook == 1 {
