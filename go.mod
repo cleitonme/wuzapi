@@ -12,7 +12,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20260630180629-b572e5bcb92b
+	go.mau.fi/whatsmeow v0.0.0-20260730092514-662ad1dc6900
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -24,7 +24,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/vincent-petithory/dataurl v1.0.0
 	golang.org/x/image v0.32.0
-	golang.org/x/sync v0.21.0
+	golang.org/x/sync v0.22.0
 	modernc.org/sqlite v1.37.1
 )
 
@@ -42,15 +42,15 @@ require (
 	github.com/beeper/argo-go v1.1.2 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
+	github.com/elliotchance/orderedmap/v3 v3.1.1 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
-	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81 // indirect
+	github.com/petermattis/goid v0.0.0-20260713124913-97594f28f5ca // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.36 // indirect
-	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
-	golang.org/x/term v0.44.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
+	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	modernc.org/libc v1.65.8 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
@@ -62,14 +62,14 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-colorable v0.1.15 // indirect
-	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
-	go.mau.fi/util v0.9.10 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
-	golang.org/x/net v0.56.0
-	golang.org/x/sys v0.46.0 // indirect
+	go.mau.fi/util v0.9.12-0.20260717235539-f9ffa7eca58d // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/net v0.57.0
+	golang.org/x/sys v0.47.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
 
 //🔥 IMPORTANTE: Substitui o whatsmeow original pelo private-meow com suporte a botões/listas
-replace go.mau.fi/whatsmeow => github.com/jobasfernandes/whatsmeow v0.0.0-20260702205023-6fe012f52816
+replace go.mau.fi/whatsmeow => github.com/cleitonme/whatsmeow v0.0.0-20260730100957-ec115797ef6e
