@@ -3613,7 +3613,9 @@ func (s *server) CheckUser() http.HandlerFunc {
 		IsInWhatsapp bool
 		JID          string // JID de telefone (user@s.whatsapp.net), quando resolvível
 		LID          string // Linked ID (user@lid), quando o WhatsApp retornar/mapear um
-		VerifiedName string
+		VerifiedName string // nome do certificado de negócio verificado (raro)
+		PushName     string // nome de exibição do contato (só se já houve troca de mensagem)
+		BusinessName string // nome de negócio salvo localmente (idem, cache de contato)
 	}
 
 	type UserCollection struct {
@@ -3661,7 +3663,7 @@ func (s *server) CheckUser() http.HandlerFunc {
 		}
 		if len(pnToResolve) > 0 {
 			if _, err := client.GetUserInfo(ctx, pnToResolve); err != nil {
-				log.Warn().Err(err).Msg("failed to resolve LID mapping for IsOnWhatsApp results")
+				client.Log.Warnf("failed to resolve LID mapping for IsOnWhatsApp results: %v", err)
 			}
 		}
 
@@ -3688,13 +3690,27 @@ func (s *server) CheckUser() http.HandlerFunc {
 				pnJID = item.JID
 			}
 
-			uc.Users = append(uc.Users, User{
+			msg := User{
 				Query:        item.Query,
 				IsInWhatsapp: item.IsIn,
 				JID:          pnJID.String(),
 				LID:          lidJID.String(),
 				VerifiedName: verifiedName,
-			})
+			}
+
+			// PushName/BusinessName só existem no cache local se já houve troca de
+			// mensagem com esse contato (recebida via message.go / history sync).
+			if item.IsIn && !pnJID.IsEmpty() {
+				if contact, err := client.Store.Contacts.GetContact(ctx, pnJID); err == nil && contact.Found {
+					msg.PushName = contact.PushName
+					msg.BusinessName = contact.BusinessName
+					if msg.VerifiedName == "" && contact.BusinessName != "" {
+						msg.VerifiedName = contact.BusinessName
+					}
+				}
+			}
+
+			uc.Users = append(uc.Users, msg)
 		}
 
 		responseJson, err := json.Marshal(uc)
