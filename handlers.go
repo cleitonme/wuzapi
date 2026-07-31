@@ -3611,7 +3611,8 @@ func (s *server) CheckUser() http.HandlerFunc {
 	type User struct {
 		Query        string
 		IsInWhatsapp bool
-		JID          string
+		JID          string // JID de telefone (user@s.whatsapp.net), quando resolvível
+		LID          string // Linked ID (user@lid), quando o WhatsApp retornar/mapear um
 		VerifiedName string
 	}
 
@@ -3623,15 +3624,15 @@ func (s *server) CheckUser() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
 
 		decoder := json.NewDecoder(r.Body)
 		var t checkUserStruct
-		err := decoder.Decode(&t)
-		if err != nil {
+		if err := decoder.Decode(&t); err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
@@ -3641,29 +3642,67 @@ func (s *server) CheckUser() http.HandlerFunc {
 			return
 		}
 
-		resp, err := clientManager.GetWhatsmeowClient(txtid).IsOnWhatsApp(context.Background(), t.Phone)
+		ctx := context.Background()
+
+		resp, err := client.IsOnWhatsApp(ctx, t.Phone)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to check if users are on WhatsApp: %s", err)))
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to check if users are on WhatsApp: %w", err))
 			return
+		}
+
+		// IsOnWhatsApp não pede a tag "lid" no usync, então o Store.LIDs pode não
+		// ter o par PN<->LID ainda. Para os que vieram como PN puro, chamamos
+		// GetUserInfo (que pede "lid") em lote, só para popular o mapeamento local.
+		var pnToResolve []types.JID
+		for _, item := range resp {
+			if item.IsIn && item.JID.Server == types.DefaultUserServer {
+				pnToResolve = append(pnToResolve, item.JID)
+			}
+		}
+		if len(pnToResolve) > 0 {
+			if _, err := client.GetUserInfo(ctx, pnToResolve); err != nil {
+				log.Warn().Err(err).Msg("failed to resolve LID mapping for IsOnWhatsApp results")
+			}
 		}
 
 		uc := new(UserCollection)
 		for _, item := range resp {
+			var verifiedName string
 			if item.VerifiedName != nil {
-				var msg = User{Query: item.Query, IsInWhatsapp: item.IsIn, JID: fmt.Sprintf("%s", item.JID), VerifiedName: item.VerifiedName.Details.GetVerifiedName()}
-				uc.Users = append(uc.Users, msg)
-			} else {
-				var msg = User{Query: item.Query, IsInWhatsapp: item.IsIn, JID: fmt.Sprintf("%s", item.JID), VerifiedName: ""}
-				uc.Users = append(uc.Users, msg)
+				verifiedName = item.VerifiedName.Details.GetVerifiedName()
 			}
+
+			var pnJID, lidJID types.JID
+			switch item.JID.Server {
+			case types.HiddenUserServer:
+				lidJID = item.JID
+				if pn, err := client.Store.LIDs.GetPNForLID(ctx, item.JID); err == nil {
+					pnJID = pn
+				}
+			case types.DefaultUserServer:
+				pnJID = item.JID
+				if lid, err := client.Store.LIDs.GetLIDForPN(ctx, item.JID); err == nil {
+					lidJID = lid
+				}
+			default:
+				pnJID = item.JID
+			}
+
+			uc.Users = append(uc.Users, User{
+				Query:        item.Query,
+				IsInWhatsapp: item.IsIn,
+				JID:          pnJID.String(),
+				LID:          lidJID.String(),
+				VerifiedName: verifiedName,
+			})
 		}
+
 		responseJson, err := json.Marshal(uc)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
+			return
 		}
-		return
+		s.Respond(w, r, http.StatusOK, string(responseJson))
 	}
 }
 
