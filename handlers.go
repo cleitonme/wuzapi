@@ -6501,6 +6501,82 @@ func (s *server) DeleteS3Config() http.HandlerFunc {
 	}
 }
 
+// Get list of chat_jids for the current authenticated user, grouped from message_history
+func (s *server) GetHistoryChats() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+
+		if historyLimit == 0 {
+			// Before returning error, try refreshing the cache in case the DB was updated
+			token := r.Context().Value("userinfo").(Values).Get("Token")
+			userinfocache.Delete(token)
+
+			var newHistoryValue sql.NullInt64
+			err := s.db.QueryRow("SELECT COALESCE(history, 0) FROM users WHERE id = $1", txtid).Scan(&newHistoryValue)
+			if err != nil {
+				log.Error().Err(err).Str("userId", txtid).Msg("Failed to fetch history from database")
+			} else {
+				historyLimit = int(newHistoryValue.Int64)
+			}
+
+			if historyLimit == 0 {
+				s.Respond(w, r, http.StatusNotImplemented, errors.New("message history is disabled for this user"))
+				return
+			}
+		}
+
+		var query string
+		if s.db.DriverName() == "postgres" {
+			query = `
+				SELECT chat_jid, MAX(timestamp) as last_message_time, COUNT(*) as message_count
+				FROM message_history
+				WHERE user_id = $1
+				GROUP BY chat_jid
+				ORDER BY last_message_time DESC`
+		} else { // sqlite
+			query = `
+				SELECT chat_jid, MAX(timestamp) as last_message_time, COUNT(*) as message_count
+				FROM message_history
+				WHERE user_id = ?
+				GROUP BY chat_jid
+				ORDER BY last_message_time DESC`
+		}
+
+		type ChatInfo struct {
+			ChatJID         string `json:"chat_jid" db:"chat_jid"`
+			LastMessageTime string `json:"last_updated" db:"last_message_time"`
+			MessageCount    int    `json:"message_count" db:"message_count"`
+		}
+
+		var chats []ChatInfo
+		err := s.db.Select(&chats, query, txtid)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to get chat list: %w", err))
+			return
+		}
+
+		// Normalize timestamp formatting (remove monotonic clock info, etc.)
+		for i := range chats {
+			if parsedTime, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", chats[i].LastMessageTime); err == nil {
+				chats[i].LastMessageTime = parsedTime.Format(time.RFC3339Nano)
+			} else if parsedTime, err := time.Parse(time.RFC3339Nano, chats[i].LastMessageTime); err == nil {
+				chats[i].LastMessageTime = parsedTime.Format(time.RFC3339Nano)
+			} else {
+				chats[i].LastMessageTime = strings.Split(chats[i].LastMessageTime, " m=")[0]
+			}
+		}
+
+		responseJson, err := json.Marshal(chats)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+	}
+}
+
 // Get chat history
 func (s *server) GetHistory() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
