@@ -464,9 +464,9 @@ Check the [API Reference](https://github.com/asternic/wuzapi/blob/main/API.md)
     </td>
     <td align="center" style="word-wrap: break-word; width: 150.0; height: 150.0">
         <a href=https://github.com/luiis716>
-            <img src=https://avatars.githubusercontent.com/u/97978347?v=4 width="100;"  style="border-radius:50%;align-items:center;justify-content:center;overflow:hidden;padding-top:10px" alt=luiis716/>
+            <img src=https://avatars.githubusercontent.com/u/97978347?v=4 width="100;"  style="border-radius:50%;align-items:center;justify-content:center;overflow:hidden;padding-top:10px" alt=GGDAG/>
             <br />
-            <sub style="font-size:14px"><b>luiis716</b></sub>
+            <sub style="font-size:14px"><b>GGDAG</b></sub>
         </a>
     </td>
     <td align="center" style="word-wrap: break-word; width: 150.0; height: 150.0">
