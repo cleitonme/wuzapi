@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Continue"
 $PSNativeCommandUseErrorActionPreference = $false
 
-$IMAGE_NAME = "whazing/wuzapi:beta"
+$IMAGE_NAME = "whazing/wuzapi:latest"
 $BUILDER_NAME = "whazing-builder"
 
 Write-Host "Verificando se builder '$BUILDER_NAME' existe..."
