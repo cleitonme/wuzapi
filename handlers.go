@@ -7144,14 +7144,9 @@ func (s *server) RequestUnavailableMessage() http.HandlerFunc {
 			return
 		}
 
-		// Build the unavailable message request
-		unavailableMessage := client.BuildUnavailableMessageRequest(chatJID, senderJID, t.ID)
-
 		// Send the request with Peer: true as required by the documentation
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		resp, err := client.SendMessage(ctx, chatJID, unavailableMessage, whatsmeow.SendRequestExtra{Peer: true})
+		// (caminho único compartilhado com o auto-retry; timeout de 30s preservado).
+		resp, err := sendUnavailableMessageRequest(client, chatJID, senderJID, t.ID, 30*time.Second)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to send unavailable message request: %s", err)))
 			return

@@ -16,6 +16,13 @@ var (
 	rabbitEnabled bool
 	rabbitOnce    sync.Once
 	rabbitQueue   string
+
+	// rabbitMu serializa Declare+Publish e a troca do canal na reconexão:
+	// amqp091.Channel não é seguro para Publish concorrente.
+	rabbitMu sync.Mutex
+	// Filas já declaradas nesta conexão (QueueDeclare é idempotente,
+	// mas evitamos o RTT por mensagem).
+	rabbitDeclared = make(map[string]bool)
 )
 
 const (
@@ -150,9 +157,12 @@ func handleConnectionErrors() {
 			}
 
 			// Reconnection successful
+			rabbitMu.Lock()
 			rabbitConn = conn
 			rabbitChannel = channel
 			rabbitEnabled = true
+			rabbitDeclared = make(map[string]bool)
+			rabbitMu.Unlock()
 
 			log.Info().Msg("RabbitMQ reconnected successfully")
 
@@ -168,27 +178,32 @@ func handleConnectionErrors() {
 
 // Optionally, allow overriding the queue per message
 func PublishToRabbit(data []byte, queueOverride ...string) error {
-	if !rabbitEnabled {
+	rabbitMu.Lock()
+	defer rabbitMu.Unlock()
+	if !rabbitEnabled || rabbitChannel == nil {
 		return nil
 	}
 	queueName := rabbitQueue
 	if len(queueOverride) > 0 && queueOverride[0] != "" {
 		queueName = queueOverride[0]
 	}
-	// Declare queue (idempotent)
-	_, err := rabbitChannel.QueueDeclare(
-		queueName,
-		true,  // durable
-		false, // auto-delete
-		false, // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
-	if err != nil {
-		log.Error().Err(err).Str("queue", queueName).Msg("Could not declare RabbitMQ queue")
-		return err
+	// Declare queue (idempotent, once per connection)
+	if !rabbitDeclared[queueName] {
+		_, err := rabbitChannel.QueueDeclare(
+			queueName,
+			true,  // durable
+			false, // auto-delete
+			false, // exclusive
+			false, // no-wait
+			nil,   // arguments
+		)
+		if err != nil {
+			log.Error().Err(err).Str("queue", queueName).Msg("Could not declare RabbitMQ queue")
+			return err
+		}
+		rabbitDeclared[queueName] = true
 	}
-	err = rabbitChannel.Publish(
+	err := rabbitChannel.Publish(
 		"",        // exchange (default)
 		queueName, // routing key = queue
 		false,     // mandatory

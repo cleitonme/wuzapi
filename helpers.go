@@ -59,6 +59,10 @@ const (
 	openGraphMaxImageDim     = 4000 // Max width or height for Open Graph images
 	openGraphUserFetchLimit  = 20   // Limit concurrent Open Graph fetches per user
 
+	// Teto do backoff exponencial de webhooks: evita esperas de horas quando
+	// retrycount/delay estão altos e o receptor segue fora do ar.
+	webhookRetryMaxDelay = 5 * time.Minute
+
 	// WebP RIFF container constants
 	riffHeaderSize  = 12 // "RIFF" + size (4) + "WEBP"
 	chunkHeaderSize = 8  // tag (4) + size (4)
@@ -274,6 +278,9 @@ func callHookWithHmac(myurl string, payload map[string]string, userID string, en
 
 			// Calculate the final delay.
 			delayDuration := time.Duration(*webhookRetryDelaySeconds) * time.Second * time.Duration(backoffFactor)
+			if delayDuration > webhookRetryMaxDelay {
+				delayDuration = webhookRetryMaxDelay
+			}
 
 			log.Warn().
 				Int("attempt", attempt+1).
@@ -428,6 +435,9 @@ func callHookFileWithHmac(myurl string, payload map[string]string, userID string
 			backoffFactor := 1 << uint(attempt-1)
 
 			delayDuration := time.Duration(*webhookRetryDelaySeconds) * time.Second * time.Duration(backoffFactor)
+			if delayDuration > webhookRetryMaxDelay {
+				delayDuration = webhookRetryMaxDelay
+			}
 
 			log.Warn().
 				Int("attempt", attempt+1).

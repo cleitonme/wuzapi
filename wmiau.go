@@ -43,6 +43,33 @@ type trimRequest struct {
 var trimDebouncer = make(map[string]*time.Timer)
 var trimMu sync.Mutex
 
+// Semáforo por usuário para chamadas de webhook: limita quantas entregas
+// HTTP concorrem por instância. O excesso aguarda (backpressure) em vez de
+// explodir em goroutines ilimitadas durante outage do receptor.
+const webhookMaxInflightPerUser = 20
+
+var (
+	webhookSemaMu sync.Mutex
+	webhookSemas  = make(map[string]chan struct{})
+)
+
+func webhookSemaFor(userID string) chan struct{} {
+	webhookSemaMu.Lock()
+	defer webhookSemaMu.Unlock()
+	sema, ok := webhookSemas[userID]
+	if !ok {
+		sema = make(chan struct{}, webhookMaxInflightPerUser)
+		webhookSemas[userID] = sema
+	}
+	return sema
+}
+
+func webhookAcquire(userID string) func() {
+	sema := webhookSemaFor(userID)
+	sema <- struct{}{}
+	return func() { <-sema }
+}
+
 // db field declaration as *sqlx.DB
 type MyClient struct {
 	WAClient       *whatsmeow.Client
@@ -98,10 +125,16 @@ func sendToUserWebHookWithHmac(webhookurl string, path string, jsonData []byte, 
 		log.Info().Str("url", webhookurl).Msg("Calling user webhook")
 
 		if path == "" {
-			go callHookWithHmac(webhookurl, data, userID, encryptedHmacKey)
+			go func() {
+				release := webhookAcquire(userID)
+				defer release()
+				callHookWithHmac(webhookurl, data, userID, encryptedHmacKey)
+			}()
 		} else {
 			// Chamar em background para não bloquear o handler
 			go func() {
+				release := webhookAcquire(userID)
+				defer release()
 				if err := callHookFileWithHmac(webhookurl, data, userID, path, encryptedHmacKey); err != nil {
 					log.Error().Err(err).Msg("Error calling hook file")
 				}
@@ -146,29 +179,48 @@ func updateAndGetUserSubscriptions(mycli *MyClient) ([]string, error) {
 	return subscribedEvents, nil
 }
 
-func getUserWebhookUrl(token string) string {
-	webhookurl := ""
-	myuserinfo, found := userinfocache.Get(token)
-	if !found {
-		log.Warn().Str("token", token).Msg("Could not call webhook as there is no user for this token")
-	} else {
-		webhookurl = myuserinfo.(Values).Get("Webhook")
+func getUserWebhookUrl(mycli *MyClient) string {
+	if myuserinfo, found := userinfocache.Get(mycli.token); found {
+		if v, ok := myuserinfo.(Values); ok {
+			return v.Get("Webhook")
+		}
+	}
+	// Fallback ao banco quando o cache foi invalidado (evita drop falso).
+	log.Warn().Str("userID", mycli.userID).Msg("User info not in cache, falling back to DB for webhook URL")
+	var webhookurl string
+	q := mycli.db.Rebind("SELECT webhook FROM users WHERE token=?")
+	if err := mycli.db.Get(&webhookurl, q, mycli.token); err != nil {
+		log.Warn().Err(err).Str("userID", mycli.userID).Msg("Could not get webhook URL from DB")
+		return ""
 	}
 	return webhookurl
 }
 
 func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path string) {
-	webhookurl := getUserWebhookUrl(mycli.token)
+	eventType, ok := postmap["type"].(string)
+	if !ok {
+		log.Error().Msg("Event type is not a string in postmap")
+		return
+	}
+
+	// Prepare webhook data early para que os sinks globais não dependam da
+	// assinatura do usuário (observabilidade de Undecryptable, falhas etc.).
+	jsonData, err := json.Marshal(postmap)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal postmap to JSON")
+		return
+	}
+
+	// Sinks globais sempre recebem, mesmo sem assinatura do usuário.
+	// (No modo stdio não há webhook HTTP/Rabbit: só notificação abaixo.)
+	if mycli.s == nil || mycli.s.mode != Stdio {
+		go sendToGlobalWebHook(jsonData, mycli.token, mycli.userID)
+		go sendToGlobalRabbit(jsonData, mycli.token, mycli.userID)
+	}
 
 	// Get updated events from cache/database
 	subscribedEvents, err := updateAndGetUserSubscriptions(mycli)
 	if err != nil {
-		return
-	}
-
-	eventType, ok := postmap["type"].(string)
-	if !ok {
-		log.Error().Msg("Event type is not a string in postmap")
 		return
 	}
 
@@ -180,7 +232,7 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 		Msg("Checking event subscription")
 
 	// Check if the current event is in the subscriptions
-	checkIfSubscribedInEvent := checkIfSubscribedToEvent(subscribedEvents, postmap["type"].(string), mycli.userID)
+	checkIfSubscribedInEvent := checkIfSubscribedToEvent(subscribedEvents, eventType, mycli.userID)
 	if !checkIfSubscribedInEvent {
 		return
 	}
@@ -191,12 +243,7 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 		return
 	}
 
-	// Prepare webhook data
-	jsonData, err := json.Marshal(postmap)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal postmap to JSON")
-		return
-	}
+	webhookurl := getUserWebhookUrl(mycli)
 
 	// Get HMAC key for this user
 	var encryptedHmacKey []byte
@@ -212,11 +259,6 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 	}
 
 	sendToUserWebHookWithHmac(webhookurl, path, jsonData, mycli.userID, mycli.token, encryptedHmacKey)
-
-	// Get global webhook if configured
-	go sendToGlobalWebHook(jsonData, mycli.token, mycli.userID)
-
-	go sendToGlobalRabbit(jsonData, mycli.token, mycli.userID)
 }
 
 func checkIfSubscribedToEvent(subscribedEvents []string, eventType string, userId string) bool {
@@ -904,6 +946,21 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		postmap["type"] = "Message"
 		dowebhook = 1
+
+		// Correlação com pedidos peer (manual via API ou auto-retry):
+		// a cópia reenviada chega como Message normal com UnavailableRequestID.
+		if evt.UnavailableRequestID != "" {
+			postmap["unavailableRequestId"] = string(evt.UnavailableRequestID)
+		}
+		if evt.RetryCount > 0 {
+			postmap["retryCount"] = evt.RetryCount
+		}
+		if evt.UnavailableRequestID != "" {
+			markUnavailableRecovered(mycli.userID, evt.Info.ID, string(evt.UnavailableRequestID))
+		} else {
+			// Reenvio do remetente com o mesmo ID também resolve o pendente.
+			markUnavailableRecovered(mycli.userID, evt.Info.ID, "")
+		}
 		metaParts := []string{fmt.Sprintf("pushname: %s", evt.Info.PushName), fmt.Sprintf("timestamp: %s", evt.Info.Timestamp)}
 		if evt.Info.Type != "" {
 			metaParts = append(metaParts, fmt.Sprintf("type: %s", evt.Info.Type))
@@ -931,12 +988,15 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if encMessage := evt.Message.GetSecretEncryptedMessage(); encMessage != nil {
 			decrypted, derr := mycli.WAClient.DecryptSecretEncryptedMessage(context.Background(), evt)
 			if derr != nil {
+				postmap["secretDecryptFailed"] = true
+				postmap["secretEncType"] = encMessage.GetSecretEncType().String()
 				log.Warn().
 					Err(derr).
 					Str("messageID", evt.Info.ID).
 					Str("secretEncType", encMessage.GetSecretEncType().String()).
 					Msg("DecryptSecretEncryptedMessage failed")
 			} else if decrypted != nil {
+				postmap["secretDecrypted"] = true
 				log.Info().
 					Str("messageID", evt.Info.ID).
 					Str("secretEncType", encMessage.GetSecretEncType().String()).
@@ -1464,7 +1524,24 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.UndecryptableMessage:
 		postmap["type"] = "UndecryptableMessage"
 		dowebhook = 1
-		log.Warn().Str("info", evt.Info.SourceString()).Msg("Undecryptable message received")
+		// Campos top-level para que o consumidor consiga chamar
+		// /chat/request-unavailable-message sem parsear o evento bruto.
+		postmap["chat"] = evt.Info.Chat.String()
+		postmap["sender"] = evt.Info.Sender.String()
+		postmap["messageId"] = evt.Info.ID
+		postmap["timestamp"] = evt.Info.Timestamp.Unix()
+		postmap["isFromMe"] = evt.Info.IsFromMe
+		postmap["isGroup"] = evt.Info.IsGroup
+		postmap["isUnavailable"] = evt.IsUnavailable
+		postmap["unavailableType"] = string(evt.UnavailableType)
+		postmap["decryptFailMode"] = string(evt.DecryptFailMode)
+		log.Warn().
+			Str("info", evt.Info.SourceString()).
+			Str("messageID", evt.Info.ID).
+			Bool("isUnavailable", evt.IsUnavailable).
+			Str("unavailableType", string(evt.UnavailableType)).
+			Msg("Undecryptable message received, scheduling peer auto-retry")
+		scheduleUnavailableAutoRetry(mycli, evt.Info.Chat, evt.Info.Sender, evt.Info.ID, string(evt.UnavailableType))
 	case *events.MediaRetry:
 		postmap["type"] = "MediaRetry"
 		dowebhook = 1
