@@ -220,41 +220,98 @@ func stopOutboxWorker() {
 
 // outboxTick: purga expirados + processa lote vencido. Para entre itens se o
 // shutdown chegar (leases de 5min devolvem o resto no próximo boot).
+// Erros de ciclo (ex.: tabela ausente) disparam UMA tentativa de ensure e têm
+// log com throttle para não spammar a cada poll.
 func outboxTick(db *sqlx.DB, cfg outboxConfig, stopCh <-chan struct{}) {
 	if db == nil {
 		return
 	}
-	purgeOutboxExpired(db, cfg)
-	items := claimOutboxDue(db, cfg)
+	if err := outboxCycle(db, cfg, stopCh); err != nil {
+		outboxConsecFail++
+		if isMissingRelationErr(err) && !outboxEnsureDone {
+			outboxEnsureDone = true
+			log.Warn().Msg("Outbox: tabela ausente, tentando ensure e repetindo o ciclo...")
+			if serr := ensureWebhookOutbox(db); serr != nil {
+				log.Error().Err(serr).Msg("Outbox: ensure falhou")
+			} else if cerr := outboxCycle(db, cfg, stopCh); cerr != nil {
+				outboxConsecFail++
+				logOutboxCycleErr(cerr)
+			} else {
+				outboxConsecFail = 0
+			}
+			return
+		}
+		logOutboxCycleErr(err)
+		return
+	}
+	outboxConsecFail = 0
+}
+
+// logOutboxCycleErr: primeiro erro e a cada 20º em ERROR, resto em DEBUG.
+func logOutboxCycleErr(err error) {
+	if outboxConsecFail <= 1 || outboxConsecFail%20 == 0 {
+		log.Error().Err(err).Int("falhas_consecutivas", outboxConsecFail).Msg("Outbox: falha no ciclo")
+	} else {
+		log.Debug().Err(err).Int("falhas_consecutivas", outboxConsecFail).Msg("Outbox: falha no ciclo (throttled)")
+	}
+}
+
+// outboxConsecFail conta falhas seguidas de ciclo; outboxEnsureDone marca a
+// tentativa única de auto-cura por processo.
+var (
+	outboxConsecFail int
+	outboxEnsureDone bool
+)
+
+// isMissingRelationErr detecta tabela ausente (pq/sqlite).
+func isMissingRelationErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "does not exist") || strings.Contains(s, "no such table")
+}
+
+// outboxCycle executa um ciclo completo; erro aborta o ciclo (itens já
+// reclamados mantêm o lease e voltam no próximo).
+func outboxCycle(db *sqlx.DB, cfg outboxConfig, stopCh <-chan struct{}) error {
+	if err := purgeOutboxExpired(db, cfg); err != nil {
+		return err
+	}
+	items, err := claimOutboxDue(db, cfg)
+	if err != nil {
+		return err
+	}
 	for _, it := range items {
 		select {
 		case <-stopCh:
 			log.Warn().Int("restantes", len(items)).Msg("Outbox: shutdown no meio do lote (leases devolvem o resto)")
-			return
+			return nil
 		default:
 		}
 		deliverOutboxItem(db, cfg, it)
 	}
+	return nil
 }
 
 // purgeOutboxExpired apaga pendências além da retenção (default 3d).
-func purgeOutboxExpired(db *sqlx.DB, cfg outboxConfig) {
+func purgeOutboxExpired(db *sqlx.DB, cfg outboxConfig) error {
 	cutoff := time.Now().AddDate(0, 0, -cfg.maxAgeDays)
 	q := db.Rebind(`DELETE FROM webhook_outbox WHERE created_at < ?`)
 	res, err := db.Exec(q, cutoff)
 	if err != nil {
-		log.Error().Err(err).Msg("Outbox: falha ao purgar expirados")
-		return
+		return fmt.Errorf("purga expirados: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		deliveryStats.outboxExpired.Add(uint64(n))
 		log.Warn().Int64("purgados", n).Int("max_age_days", cfg.maxAgeDays).Msg("Outbox: pendências expiradas purgadas (retenção)")
 	}
+	return nil
 }
 
 // claimOutboxDue reclama até batch itens vencidos com lease de 5min.
 // PostgreSQL usa SKIP LOCKED (seguro multi-worker); SQLite, processo único.
-func claimOutboxDue(db *sqlx.DB, cfg outboxConfig) []outboxItem {
+func claimOutboxDue(db *sqlx.DB, cfg outboxConfig) ([]outboxItem, error) {
 	var items []outboxItem
 	now := time.Now()
 	leaseCutoff := now.Add(-5 * time.Minute)
@@ -269,22 +326,20 @@ func claimOutboxDue(db *sqlx.DB, cfg outboxConfig) []outboxItem {
 				FOR UPDATE SKIP LOCKED
 			)
 			RETURNING id, user_id, webhook_url, event_type, message_id, payload,
-				attempts, next_retry_at, last_error, created_at`
+				attempts, next_retry_at, claimed_at, last_error, created_at`
 		if err := db.Select(&items, q, cfg.batch); err != nil {
-			log.Error().Err(err).Msg("Outbox: falha no claim (postgres)")
-			return nil
+			return nil, fmt.Errorf("claim postgres: %w", err)
 		}
-		return items
+		return items, nil
 	}
 	// SQLite: SELECT + UPDATE otimista (processo único).
 	q := db.Rebind(`SELECT id, user_id, webhook_url, event_type, message_id, payload,
-		attempts, next_retry_at, last_error, created_at
+		attempts, next_retry_at, claimed_at, last_error, created_at
 		FROM webhook_outbox
 		WHERE next_retry_at <= ? AND (claimed_at IS NULL OR claimed_at < ?)
 		ORDER BY next_retry_at ASC LIMIT ?`)
 	if err := db.Select(&items, q, now, leaseCutoff, cfg.batch); err != nil {
-		log.Error().Err(err).Msg("Outbox: falha no claim (sqlite)")
-		return nil
+		return nil, fmt.Errorf("claim sqlite: %w", err)
 	}
 	for _, it := range items {
 		uq := db.Rebind(`UPDATE webhook_outbox SET claimed_at = ?
@@ -293,7 +348,7 @@ func claimOutboxDue(db *sqlx.DB, cfg outboxConfig) []outboxItem {
 			log.Warn().Err(err).Int64("id", it.ID).Msg("Outbox: falha ao marcar claim")
 		}
 	}
-	return items
+	return items, nil
 }
 
 // deliverOutboxItem tenta UMA entrega. Regras (plano aprovado):

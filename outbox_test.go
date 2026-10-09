@@ -370,3 +370,63 @@ func TestOutboxMigrationSQLite(t *testing.T) {
 		t.Errorf("pendentes = %d, want 1", n)
 	}
 }
+
+// TestEnsureWebhookOutboxIdempotent: ensure sobre tabela existente é no-op.
+func TestEnsureWebhookOutboxIdempotent(t *testing.T) {
+	db := openTestOutboxDB(t)
+	if err := ensureWebhookOutbox(db); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if err := ensureWebhookOutbox(db); err != nil {
+		t.Fatalf("ensure 2x: %v", err)
+	}
+	seedOutboxUser(t, db, "u1", "http://x")
+	data := map[string]string{"jsonData": `{"type":"Message"}`, "userID": "u1"}
+	if err := enqueueOutbox(db, "u1", "http://x", data, "x"); err != nil {
+		t.Fatalf("enqueue pós-ensure: %v", err)
+	}
+}
+
+// TestEnsureWebhookOutboxCreates: sem a tabela (caso do PG que só tinha o
+// registro da migration), o ensure cria e o worker volta a funcionar.
+func TestEnsureWebhookOutboxCreates(t *testing.T) {
+	db, err := sqlx.Open("sqlite", ":memory:?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("ddl users: %v", err)
+	}
+	// Estado quebrado: sem webhook_outbox.
+	if err := ensureWebhookOutbox(db); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	var name string
+	if err := db.Get(&name, `SELECT name FROM sqlite_master WHERE type='table' AND name='webhook_outbox'`); err != nil {
+		t.Fatalf("tabela não criada pelo ensure: %v", err)
+	}
+}
+
+// TestOutboxMissingTableSelfHeals: ciclo com tabela ausente dispara o ensure
+// único e o ciclo seguinte funciona.
+func TestOutboxMissingTableSelfHeals(t *testing.T) {
+	db, err := sqlx.Open("sqlite", ":memory:?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL, webhook TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("ddl users: %v", err)
+	}
+	outboxEnsureDone = false
+	t.Cleanup(func() { outboxEnsureDone = false })
+	testOutboxTick(db) // tabela ausente -> ensure + retry interno
+	var name string
+	if err := db.Get(&name, `SELECT name FROM sqlite_master WHERE type='table' AND name='webhook_outbox'`); err != nil {
+		t.Fatalf("auto-cura não criou a tabela: %v", err)
+	}
+	if !outboxEnsureDone {
+		t.Error("flag outboxEnsureDone não marcada")
+	}
+}

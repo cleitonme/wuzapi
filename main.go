@@ -395,6 +395,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Garante a tabela do outbox fora do registro de migrations: cura
+	// deployments onde a migration 12 foi marcada aplicada mas a tabela não
+	// existe no schema visível. Não-fatal: o worker tenta de novo sozinho.
+	if err := ensureWebhookOutbox(db); err != nil {
+		log.Warn().Err(err).Msg("ensureWebhookOutbox falhou no boot (worker tentará se recuperar)")
+	}
+
 	// ADICIONE AQUI - Inicializar o cache ANTES de criar o server
 	log.Info().Msg("🚀 Initializing media cache system")
 	InitMediaCache()

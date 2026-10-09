@@ -481,6 +481,92 @@ func ensurePostStartupIndexes(db *sqlx.DB) error {
 	return nil
 }
 
+// ensureWebhookOutbox garante a tabela do outbox fora do mecanismo de
+// migrations (DDL direto e idempotente, sem DO $$).
+//
+// Motivação: deployments onde a migration 12 foi registrada como aplicada mas
+// a tabela não existe no schema visível (search_path divergente entre o role
+// que migrou e o runtime, tabela dropada depois, restore parcial). Como o
+// worker roda todo boot, este ensure o cura sozinho no restart — sem ele o
+// worker falharia para sempre com `pq: relation "webhook_outbox" does not
+// exist`. Usa os mesmos nomes não-qualificados do resto do app (consistente
+// com users/message_history).
+func ensureWebhookOutbox(db *sqlx.DB) error {
+	if db.DriverName() == "sqlite" {
+		if _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS webhook_outbox (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				webhook_url TEXT NOT NULL DEFAULT '',
+				event_type TEXT NOT NULL DEFAULT '',
+				message_id TEXT NOT NULL DEFAULT '',
+				payload TEXT NOT NULL,
+				attempts INTEGER NOT NULL DEFAULT 0,
+				next_retry_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				claimed_at DATETIME NULL,
+				last_error TEXT NOT NULL DEFAULT '',
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`);
+			err != nil {
+			return fmt.Errorf("ensureWebhookOutbox sqlite table: %w", err)
+		}
+		for _, idx := range []string{
+			`CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due ON webhook_outbox (next_retry_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_webhook_outbox_user ON webhook_outbox (user_id)`,
+		} {
+			if _, err := db.Exec(idx); err != nil {
+				return fmt.Errorf("ensureWebhookOutbox sqlite index: %w", err)
+			}
+		}
+		return nil
+	}
+
+	// PostgreSQL.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS webhook_outbox (
+			id SERIAL PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			webhook_url TEXT NOT NULL DEFAULT '',
+			event_type TEXT NOT NULL DEFAULT '',
+			message_id TEXT NOT NULL DEFAULT '',
+			payload TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_retry_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			claimed_at TIMESTAMP NULL,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`);
+		err != nil {
+		return fmt.Errorf("ensureWebhookOutbox pg table: %w", err)
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due ON webhook_outbox (next_retry_at) WHERE claimed_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_outbox_user ON webhook_outbox (user_id)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("ensureWebhookOutbox pg index: %w", err)
+		}
+	}
+	// FK best-effort: ignora "já existe" (concorrência entre réplicas).
+	if _, err := db.Exec(`
+		ALTER TABLE webhook_outbox
+		ADD CONSTRAINT fk_webhook_outbox_user FOREIGN KEY (user_id)
+		REFERENCES users(id) ON DELETE CASCADE`);
+		err != nil && !isConstraintExistsErr(err) {
+		return fmt.Errorf("ensureWebhookOutbox pg fk: %w", err)
+	}
+	return nil
+}
+
+// isConstraintExistsErr detecta "já existe" para DDL concorrente.
+func isConstraintExistsErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "already exists")
+}
+
 func createMigrationsTable(db *sqlx.DB) error {
 	var tableExists bool
 	var err error
