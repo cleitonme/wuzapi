@@ -31,6 +31,9 @@ var deliveryStats = struct {
 	webhookSent      atomic.Uint64
 	webhookFailed    atomic.Uint64
 	webhookShed      atomic.Uint64 // eventos desviados p/ DLQ sem tentar HTTP (semáforo cheio/shutdown)
+	outboxDelivered  atomic.Uint64 // eventos do outbox entregues pelo worker
+	outboxExpired    atomic.Uint64 // pendências purgadas por retenção (3d)
+	outboxDropped    atomic.Uint64 // pendências descartadas (canal excluído / payload inválido)
 	rabbitPublished  atomic.Uint64
 	rabbitFailed     atomic.Uint64
 	rabbitDisabled   atomic.Uint64 // eventos Rabbit descartados com broker fora

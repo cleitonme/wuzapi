@@ -58,6 +58,8 @@ func (s *server) GetHealth() http.HandlerFunc {
 		Version           string                 `json:"version,omitempty"`
 		RabbitEnabled     bool                   `json:"rabbit_enabled"`
 		Delivery          map[string]uint64      `json:"delivery"`
+		OutboxPending     int64                  `json:"outbox_pending"`
+		OutboxOldestAge   int64                  `json:"outbox_oldest_age_seconds"`
 	}
 
 	startTime := time.Now()
@@ -117,6 +119,9 @@ func (s *server) GetHealth() http.HandlerFunc {
 				"webhook_sent":     deliveryStats.webhookSent.Load(),
 				"webhook_failed":   deliveryStats.webhookFailed.Load(),
 				"webhook_shed":     deliveryStats.webhookShed.Load(),
+				"outbox_delivered": deliveryStats.outboxDelivered.Load(),
+				"outbox_expired":   deliveryStats.outboxExpired.Load(),
+				"outbox_dropped":   deliveryStats.outboxDropped.Load(),
 				"rabbit_published": deliveryStats.rabbitPublished.Load(),
 				"rabbit_failed":    deliveryStats.rabbitFailed.Load(),
 				"rabbit_disabled":  deliveryStats.rabbitDisabled.Load(),
@@ -124,6 +129,7 @@ func (s *server) GetHealth() http.HandlerFunc {
 				"dlq_disk":         deliveryStats.dlqDiskFallback.Load(),
 			},
 		}
+		response.OutboxPending, response.OutboxOldestAge = outboxPendingStats(s.db)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -5667,6 +5673,12 @@ func (s *server) DeleteUser() http.HandlerFunc {
 		vars := mux.Vars(r)
 		userID := vars["id"]
 
+		// Apaga pendências do outbox do canal (o worker também apaga ao
+		// detectar canal inexistente; aqui é imediato).
+		if _, err := s.db.Exec(s.db.Rebind("DELETE FROM webhook_outbox WHERE user_id=?"), userID); err != nil {
+			log.Error().Err(err).Str("userID", userID).Msg("Failed to delete user outbox")
+		}
+
 		// Delete the user from the database
 		result, err := s.db.Exec("DELETE FROM users WHERE id=$1", userID)
 		if err != nil {
@@ -5774,6 +5786,12 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 				"details": "failed to delete user from database",
 			})
 			return
+		}
+
+		// 2b. Apaga pendências do outbox do canal (FK cascade cobre no PG;
+		// explícito aqui garante SQLite e resposta imediata).
+		if _, err := s.db.Exec(s.db.Rebind("DELETE FROM webhook_outbox WHERE user_id=?"), id); err != nil {
+			log.Error().Err(err).Str("userID", id).Msg("Failed to delete user outbox")
 		}
 
 		// 3. Cleanup from memory

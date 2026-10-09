@@ -90,11 +90,19 @@ func webhookAcquireTimeout(userID string, timeout time.Duration) (release func()
 }
 
 // shedToDLQ preserva um evento que nem chegou a tentar o HTTP (semáforo cheio
-// ou shutdown em andamento). Última linha de defesa contra perda silenciosa.
+// ou shutdown em andamento). Destino preferencial: outbox (retry contínuo);
+// fallback legado (DLQ Rabbit -> spool) se o DB estiver fora.
 func shedToDLQ(webhookurl string, data map[string]string, userID, reason string) {
 	deliveryStats.webhookShed.Add(1)
 	log.Error().Str("url", webhookurl).Str("userID", userID).Str("reason", reason).
-		Msg("Webhook sem tentativa HTTP, desviando para DLQ...")
+		Msg("Webhook sem tentativa HTTP, persistindo...")
+	if outboxDB != nil {
+		if err := enqueueOutbox(outboxDB, userID, webhookurl, data, reason); err == nil {
+			return
+		} else {
+			log.Error().Err(err).Str("userID", userID).Msg("Outbox indisponível, caindo para DLQ legada...")
+		}
+	}
 	errPayload := WebhookErrorPayload{
 		URL:          webhookurl,
 		Payload:      stringMapToInterface(data),

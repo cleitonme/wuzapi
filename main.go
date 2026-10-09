@@ -431,8 +431,16 @@ func main() {
 
 	s.connectOnStartup()
 
+	// Outbox de webhooks: worker de retry contínuo (sweep imediato no boot
+	// retoma pendências de antes do restart).
+	outboxStopCh = make(chan struct{})
+	startOutboxWorker(db, outboxStopCh)
+
 	startHTTPMode(s)
 }
+
+// outboxStopCh sinaliza o worker do outbox no shutdown.
+var outboxStopCh chan struct{}
 
 func startHTTPMode(s *server) {
 	srv := &http.Server{
@@ -482,6 +490,13 @@ func startHTTPMode(s *server) {
 			log.Info().Msg("All in-flight deliveries completed")
 		} else {
 			log.Warn().Dur("timeout", waitTimeout).Msg("Shutdown timeout reached with deliveries still in flight (failed webhooks were preserved via DLQ/disk spool)")
+		}
+
+		// Para o worker do outbox (pendências ficam no banco e retomam no boot).
+		if outboxStopCh != nil {
+			close(outboxStopCh)
+			stopOutboxWorker()
+			log.Info().Msg("Outbox worker stopped (pending items resume on next boot)")
 		}
 
 		log.Info().Msg("Server Exited Properly")

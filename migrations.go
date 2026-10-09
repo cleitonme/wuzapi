@@ -112,6 +112,48 @@ var migrations = []Migration{
     END $$;
     `,
 	},
+	{
+		ID:   12,
+		Name: "add_webhook_outbox",
+		UpSQL: `
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'webhook_outbox') THEN
+            CREATE TABLE webhook_outbox (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                webhook_url TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL DEFAULT '',
+                message_id TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                claimed_at TIMESTAMP NULL,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'webhook_outbox'
+              AND indexname = 'idx_webhook_outbox_due'
+        ) THEN
+            CREATE INDEX idx_webhook_outbox_due
+            ON webhook_outbox (next_retry_at)
+            WHERE claimed_at IS NULL;
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'webhook_outbox'
+              AND indexname = 'idx_webhook_outbox_user'
+        ) THEN
+            CREATE INDEX idx_webhook_outbox_user ON webhook_outbox (user_id);
+        END IF;
+    END $$;
+    `,
+	},
 }
 
 const changeIDToStringSQL = `
@@ -680,6 +722,33 @@ func applyMigrationWithTx(db *sqlx.DB, migration Migration) error {
                 CREATE INDEX IF NOT EXISTS idx_message_history_last_msg
                 ON message_history (user_id, chat_jid, timestamp DESC)
             `)
+		}
+	} else if migration.ID == 12 {
+		if db.DriverName() == "sqlite" {
+			_, err = tx.Exec(`
+                CREATE TABLE IF NOT EXISTS webhook_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    webhook_url TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL DEFAULT '',
+                    message_id TEXT NOT NULL DEFAULT '',
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    claimed_at DATETIME NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )`)
+			if err == nil {
+				_, err = tx.Exec(`
+                    CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due
+                    ON webhook_outbox (next_retry_at)`)
+			}
+			if err == nil {
+				_, err = tx.Exec(`
+                    CREATE INDEX IF NOT EXISTS idx_webhook_outbox_user
+                    ON webhook_outbox (user_id)`)
+			}
 		}
 	} else {
 		_, err = tx.Exec(migration.UpSQL)

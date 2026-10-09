@@ -150,6 +150,9 @@ WUZAPI_PORT=8080 # Port for the WuzAPI server
 ### RabbitMQ Integration (DLQ for failed webhooks)
 WuzAPI publishes failed-webhook payloads to a RabbitMQ dead-letter queue, with on-disk spool fallback when the broker is down.
 
+### Webhook Outbox (persistent retry)
+Failed user-webhook deliveries are persisted in the `webhook_outbox` table and retried continuously with exponential backoff (base 60s, cap 1h, poll every 30s) **while the channel (user) exists**. Delivery always uses the user's **current** webhook URL. A pending item only dies when: delivered (2xx), the channel is deleted, or retention expires (`OUTBOX_MAX_AGE_DAYS`, default 3 days). Duplicates are possible — consumers should dedupe by message ID. `/health` exposes `outbox_pending`, `outbox_oldest_age_seconds`, `outbox_delivered`, `outbox_expired` and `outbox_dropped`.
+
 Set these environment variables to enable RabbitMQ integration:
 
 ```

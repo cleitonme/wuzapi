@@ -251,6 +251,46 @@ func updateUserInfo(values interface{}, field string, value string) interface{} 
 	return values
 }
 
+// doHookPost executa UMA tentativa de POST do webhook (sem retry).
+// Compartilhado entre callHook (loop com backoff) e o worker do outbox.
+func doHookPost(client *resty.Client, myurl string, payload map[string]string, userID string) error {
+	var body interface{} = payload
+
+	format := os.Getenv("WEBHOOK_FORMAT")
+
+	var req *resty.Request
+	if format == "json" {
+		if jsonStr, ok := payload["jsonData"]; ok {
+			var postmap map[string]interface{}
+
+			if err := json.Unmarshal([]byte(jsonStr), &postmap); err == nil {
+				if instanceName, ok := payload["instanceName"]; ok {
+					postmap["instanceName"] = instanceName
+				}
+				postmap["userID"] = userID
+				body = postmap
+			}
+		}
+
+		req = client.R().SetHeader("Content-Type", "application/json").SetBody(body)
+
+	} else {
+
+		req = client.R().SetFormData(payload)
+	}
+
+	resp, postErr := req.Post(myurl)
+	if postErr != nil {
+		return postErr
+	}
+
+	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
+		return fmt.Errorf("unexpected status code: %d. Body: %s", resp.StatusCode(), string(resp.Body()))
+	}
+
+	return nil
+}
+
 // webhook for regular messages
 func callHook(myurl string, payload map[string]string, userID string) {
 	log.Info().Str("url", myurl).Str("userID", userID).Msg("Sending POST to client with retry logic")
@@ -258,25 +298,27 @@ func callHook(myurl string, payload map[string]string, userID string) {
 	client := clientManager.GetHTTPClient(userID)
 	if client == nil {
 		// Sessão desconectada/limpa no meio do caminho: sem cliente HTTP não há
-		// como entregar. Escoa direto para DLQ em vez de panic (nil deref).
+		// como entregar agora. Persiste no outbox (retry quando reconectar).
 		lastError := fmt.Errorf("no HTTP client for user (session disconnected?)")
 		deliveryStats.webhookFailed.Add(1)
-		log.Error().Str("url", myurl).Str("userID", userID).Msg("Webhook sem HTTP client, enviando para DLQ...")
-		preserveDLQ("data", func() error {
-			return PublishDataErrorToQueue(WebhookErrorPayload{
-				URL:          myurl,
-				Payload:      stringMapToInterface(payload),
-				UserID:       userID,
-				AttemptTime:  time.Now(),
-				ErrorMessage: lastError.Error(),
-			})
-		}, userID, WebhookErrorPayload{
+		log.Error().Str("url", myurl).Str("userID", userID).Msg("Webhook sem HTTP client, persistindo no outbox...")
+		legacy := WebhookErrorPayload{
 			URL:          myurl,
 			Payload:      stringMapToInterface(payload),
 			UserID:       userID,
 			AttemptTime:  time.Now(),
 			ErrorMessage: lastError.Error(),
-		})
+		}
+		if outboxDB != nil {
+			if err := enqueueOutbox(outboxDB, userID, myurl, payload, lastError.Error()); err == nil {
+				return
+			} else {
+				log.Error().Err(err).Str("userID", userID).Msg("Outbox indisponível, caindo para DLQ legada...")
+			}
+		}
+		preserveDLQ("data", func() error {
+			return PublishDataErrorToQueue(legacy)
+		}, userID, legacy)
 		return
 	}
 
@@ -287,8 +329,6 @@ func callHook(myurl string, payload map[string]string, userID string) {
 	}
 
 	var lastError error
-
-	var body interface{} = payload
 
 	// Starts the retry loop.
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -315,47 +355,12 @@ func callHook(myurl string, payload map[string]string, userID string) {
 			}
 		}
 
-		var req *resty.Request
-
-		format := os.Getenv("WEBHOOK_FORMAT")
-
-		if format == "json" {
-			if jsonStr, ok := payload["jsonData"]; ok {
-				var postmap map[string]interface{}
-
-				if err := json.Unmarshal([]byte(jsonStr), &postmap); err == nil {
-					if instanceName, ok := payload["instanceName"]; ok {
-						postmap["instanceName"] = instanceName
-					}
-					postmap["userID"] = userID
-					body = postmap
-				}
-			}
-
-			req = client.R().SetHeader("Content-Type", "application/json").SetBody(body)
-
-		} else {
-
-			req = client.R().SetFormData(payload)
-			body = payload
-		}
-
-		resp, postErr := req.Post(myurl)
+		postErr := doHookPost(client, myurl, payload, userID)
 
 		lastError = postErr
 
 		if postErr != nil {
-			log.Error().Err(postErr).Int("attempt", attempt+1).Str("url", myurl).Msg("Webhook failed due to network/IO error")
-			continue
-		}
-
-		if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
-			lastError = fmt.Errorf("unexpected status code: %d. Body: %s", resp.StatusCode(), string(resp.Body()))
-			log.Error().
-				Int("status", resp.StatusCode()).
-				Int("attempt", attempt+1).
-				Str("url", myurl).
-				Msg("Webhook failed due to non-2xx status code")
+			log.Error().Err(postErr).Int("attempt", attempt+1).Str("url", myurl).Msg("Webhook failed")
 
 			if !*webhookRetryEnabled {
 				break
@@ -363,37 +368,26 @@ func callHook(myurl string, payload map[string]string, userID string) {
 			continue
 		}
 
-		log.Info().Int("status", resp.StatusCode()).Str("url", myurl).Msg("Webhook call successful")
+		log.Info().Str("url", myurl).Msg("Webhook call successful")
 		deliveryStats.webhookSent.Add(1)
 		return
 	}
 
 	if lastError != nil {
 		deliveryStats.webhookFailed.Add(1)
-		log.Error().Str("url", myurl).Msg("Webhook permanently failed after all retries. Sending to error queue...")
-
-		errorPayloadMap := make(map[string]interface{})
-		if p, ok := body.(map[string]string); ok {
-
-			for k, v := range p {
-				errorPayloadMap[k] = v
-			}
-		} else if p, ok := body.(map[string]interface{}); ok {
-
-			errorPayloadMap = p
-		}
+		log.Error().Str("url", myurl).Msg("Webhook permanently failed after all retries. Persisting to outbox...")
 
 		errorPayload := WebhookErrorPayload{
 			URL:          myurl,
-			Payload:      errorPayloadMap,
+			Payload:      stringMapToInterface(payload),
 			UserID:       userID,
 			AttemptTime:  time.Now(),
 			ErrorMessage: lastError.Error(),
 		}
 
-		// Se o Rabbit estiver fora, o payload é preservado em disco
-		// (dbdata/webhook_errors) em vez de descartado silenciosamente.
-		preserveDLQ("data", func() error { return PublishDataErrorToQueue(errorPayload) }, userID, errorPayload)
+		// Destino durável: outbox (DB) com retry contínuo pelo worker.
+		// Se o DB estiver fora, cai no caminho legado (DLQ Rabbit -> spool em disco).
+		persistFailedWebhook(userID, myurl, payload, lastError.Error(), errorPayload)
 	}
 }
 
