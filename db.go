@@ -295,9 +295,14 @@ func (s *server) batchSaveHistoryMessages(messages []HistoryMessage) error {
 		VALUES %s
 	`, strings.Join(valueStrings, ","))
 
-	// Postgres pode usar ON CONFLICT
+	// Postgres pode usar ON CONFLICT; SQLite usa OR IGNORE (um duplicado
+	// não pode abortar o batch inteiro do HistorySync).
 	if isPostgres {
 		query += " ON CONFLICT (user_id, message_id) DO NOTHING"
+	} else {
+		query = `INSERT OR IGNORE INTO message_history
+		(user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
+		VALUES ` + strings.Join(valueStrings, ",")
 	}
 
 	_, err := s.db.Exec(query, valueArgs...)

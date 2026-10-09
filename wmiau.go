@@ -120,20 +120,20 @@ func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID s
 		log.Info().Str("url", webhookurl).Msg("Calling user webhook")
 
 		if path == "" {
-			go func() {
+			trackBackground(func() {
 				release := webhookAcquire(userID)
 				defer release()
 				callHook(webhookurl, data, userID)
-			}()
+			})
 		} else {
 			// Chamar em background para não bloquear o handler
-			go func() {
+			trackBackground(func() {
 				release := webhookAcquire(userID)
 				defer release()
 				if err := callHookFile(webhookurl, data, userID, path); err != nil {
 					log.Error().Err(err).Msg("Error calling hook file")
 				}
-			}()
+			})
 		}
 	} else {
 		log.Warn().Str("userid", userID).Msg("No webhook set for user")
@@ -205,9 +205,11 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 		return
 	}
 
-	// Sinks globais sempre recebem.
-	go sendToGlobalWebHook(jsonData, mycli.token, mycli.userID)
-	go sendToGlobalRabbit(jsonData, mycli.token, mycli.userID)
+	// Sinks globais sempre recebem, em goroutines rastreadas para que o
+	// graceful shutdown as aguarde. São independentes: falha no Rabbit
+	// nunca afeta a entrega do webhook HTTP e vice-versa.
+	trackBackground(func() { sendToGlobalWebHook(jsonData, mycli.token, mycli.userID) })
+	trackBackground(func() { sendToGlobalRabbit(jsonData, mycli.token, mycli.userID) })
 
 	// Get updated events from cache/database
 	subscribedEvents, err := updateAndGetUserSubscriptions(mycli)

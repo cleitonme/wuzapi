@@ -1,14 +1,35 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrRabbitDisabled indica que o broker está fora/desabilitado. Diferente do
+// comportamento antigo (nil silencioso), o chamador agora sabe que o evento
+// Rabbit foi descartado e pode reagir (métrica, log, spool em disco na DLQ)
+// sem afetar o caminho do webhook HTTP, que é independente.
+var ErrRabbitDisabled = errors.New("rabbitmq: broker indisponível (desabilitado ou sem conexão)")
+
+// rabbitPublishTimeout limita o tempo de um publish (declare + publish) para
+// que um broker travado não segure rabbitMu para sempre. Configurável via
+// RABBITMQ_PUBLISH_TIMEOUT_SECONDS (padrão 8s).
+func rabbitPublishTimeout() time.Duration {
+	if v := os.Getenv("RABBITMQ_PUBLISH_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 120 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 8 * time.Second
+}
 
 var (
 	rabbitConn    *amqp091.Connection
@@ -146,20 +167,38 @@ func InitRabbitMQ() {
 	}
 }
 
-// Monitor connection errors and attempt reconnection
+// Monitor connection AND channel errors and attempt reconnection.
+// O código antigo observava só o NotifyClose da conexão: se o broker fecha
+// apenas o canal (ex: unexpected_frame), rabbitEnabled seguia true com canal
+// morto até o próximo publish falhar. Agora ambos são observados.
 func handleConnectionErrors() {
 	rabbitMu.Lock()
 	currentConn := rabbitConn
+	currentChannel := rabbitChannel
 	rabbitMu.Unlock()
 	if currentConn == nil {
 		return
 	}
-	notifyClose := currentConn.NotifyClose(make(chan *amqp091.Error))
+	notifyConnClose := currentConn.NotifyClose(make(chan *amqp091.Error))
+	var notifyChanClose chan *amqp091.Error
+	if currentChannel != nil {
+		notifyChanClose = currentChannel.NotifyClose(make(chan *amqp091.Error))
+	}
 
-	for err := range notifyClose {
+	// Falha vinda de qualquer um dos dois dispara a reconexão (uma vez).
+	var connErr *amqp091.Error
+	if notifyChanClose != nil {
+		select {
+		case connErr = <-notifyConnClose:
+		case connErr = <-notifyChanClose:
+		}
+	} else {
+		connErr = <-notifyConnClose
+	}
+	if connErr != nil {
 		log.Error().
-			Err(err).
-			Msg("RabbitMQ connection closed unexpectedly. Attempting reconnection...")
+			Err(connErr).
+			Msg("RabbitMQ connection/channel closed unexpectedly. Attempting reconnection...")
 
 		// Clear the dead connection so no publisher can reach its channel.
 		setRabbitConnection(nil, nil, false)
@@ -207,6 +246,15 @@ func handleConnectionErrors() {
 	}
 }
 
+// markRabbitDeadLocked invalida a conexão/canal sob rabbitMu (chamador já
+// detém o lock — NÃO chama setRabbitConnection aqui para evitar deadlock).
+func markRabbitDeadLocked() {
+	rabbitConn = nil
+	rabbitChannel = nil
+	rabbitEnabled = false
+	rabbitDeclared = make(map[string]bool)
+}
+
 // Optionally, allow overriding the queue per message
 func PublishToRabbit(data []byte, queueOverride ...string) error {
 	// Both calls below write frames on the same shared AMQP channel and must not
@@ -215,13 +263,16 @@ func PublishToRabbit(data []byte, queueOverride ...string) error {
 	rabbitMu.Lock()
 	defer rabbitMu.Unlock()
 	if !rabbitEnabled || rabbitChannel == nil {
-		return nil
+		deliveryStats.rabbitDisabled.Add(1)
+		return ErrRabbitDisabled
 	}
 	channel := rabbitChannel
 	queueName := rabbitQueue
 	if len(queueOverride) > 0 && queueOverride[0] != "" {
 		queueName = queueOverride[0]
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), rabbitPublishTimeout())
+	defer cancel()
 	// Declare queue (idempotent, once per connection)
 	if !rabbitDeclared[queueName] {
 		_, err := channel.QueueDeclare(
@@ -233,12 +284,15 @@ func PublishToRabbit(data []byte, queueOverride ...string) error {
 			nil,   // arguments
 		)
 		if err != nil {
+			deliveryStats.rabbitFailed.Add(1)
 			log.Error().Err(err).Str("queue", queueName).Msg("Could not declare RabbitMQ queue")
+			markRabbitDeadLocked()
 			return err
 		}
 		rabbitDeclared[queueName] = true
 	}
-	err := channel.Publish(
+	err := channel.PublishWithContext(
+		ctx,
 		"",        // exchange (default)
 		queueName, // routing key = queue
 		false,     // mandatory
@@ -250,8 +304,15 @@ func PublishToRabbit(data []byte, queueOverride ...string) error {
 		},
 	)
 	if err != nil {
+		deliveryStats.rabbitFailed.Add(1)
 		log.Error().Err(err).Str("queue", queueName).Msg("Could not publish to RabbitMQ")
+		// Erro de I/O no canal compartilhado provavelmente o invalidou (ou
+		// a conexão caiu no meio — TOCTOU residual). Invalida o estado para
+		// que o monitor de NotifyClose/reconnect assuma e os próximos
+		// publishers recebam ErrRabbitDisabled em vez de reusar canal morto.
+		markRabbitDeadLocked()
 	} else {
+		deliveryStats.rabbitPublished.Add(1)
 		log.Debug().Str("queue", queueName).Msg("Published message to RabbitMQ")
 	}
 	return err
@@ -279,6 +340,7 @@ func sendToGlobalRabbit(jsonData []byte, token string, userID string, queueName 
 		} else {
 			log.Debug().Msg("RabbitMQ not configured. Event not published to queue.")
 		}
+		deliveryStats.rabbitDisabled.Add(1)
 		return
 	}
 
@@ -310,39 +372,49 @@ func sendToGlobalRabbit(jsonData []byte, token string, userID string, queueName 
 
 	err = PublishToRabbit(enhancedJSON, queueName...)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to publish to RabbitMQ")
+		// Descarte intencional do evento Rabbit: o webhook HTTP segue seu
+		// próprio caminho e não é afetado. Só métrica + log.
+		log.Warn().Err(err).Msg("Failed to publish to RabbitMQ (webhook delivery unaffected)")
 	}
 }
 
-func PublishFileErrorToQueue(payload WebhookFileErrorPayload) {
+// PublishFileErrorToQueue tenta a DLQ no Rabbit; retorna erro para que o
+// chamador preserve o payload em disco. Nunca descarta silenciosamente.
+func PublishFileErrorToQueue(payload WebhookFileErrorPayload) error {
 
 	queueName := *webhookErrorQueueName
 
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal file error payload for RabbitMQ")
-		return
+		return err
 	}
 
 	err = PublishToRabbit(body, queueName)
 	if err != nil {
-		log.Error().Str("queue", queueName).Msg("Failed to publish file error payload to queue")
-	} else {
-		log.Info().Str("queue", queueName).Msg("File error payload successfully published to queue")
+		log.Warn().Err(err).Str("queue", queueName).Msg("Failed to publish file error payload to queue")
+		return err
 	}
+	deliveryStats.dlqRabbit.Add(1)
+	log.Info().Str("queue", queueName).Msg("File error payload successfully published to queue")
+	return nil
 }
 
-func PublishDataErrorToQueue(payload WebhookErrorPayload) {
+// PublishDataErrorToQueue tenta a DLQ no Rabbit; retorna erro para que o
+// chamador preserve o payload em disco. Nunca descarta silenciosamente.
+func PublishDataErrorToQueue(payload WebhookErrorPayload) error {
 	queueName := *webhookErrorQueueName
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal data error payload for RabbitMQ")
-		return
+		return err
 	}
 	err = PublishToRabbit(body, queueName)
 	if err != nil {
-		log.Error().Str("queue", queueName).Msg("Failed to publish data error payload to queue")
-	} else {
-		log.Info().Str("queue", queueName).Msg("Data error payload successfully published to queue")
+		log.Warn().Err(err).Str("queue", queueName).Msg("Failed to publish data error payload to queue")
+		return err
 	}
+	deliveryStats.dlqRabbit.Add(1)
+	log.Info().Str("queue", queueName).Msg("Data error payload successfully published to queue")
+	return nil
 }

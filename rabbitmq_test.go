@@ -36,9 +36,10 @@ func TestRabbitStateHelpers(t *testing.T) {
 		t.Error("rabbitIsEnabled() = true after disabling, want false")
 	}
 
-	// A disabled publisher is a no-op and must not touch the nil channel.
-	if err := PublishToRabbit([]byte(`{"x":1}`)); err != nil {
-		t.Errorf("PublishToRabbit while disabled returned %v, want nil", err)
+	// A disabled publisher drops the Rabbit event with a sentinel error and
+	// must not touch the nil channel. The webhook HTTP path is unaffected.
+	if err := PublishToRabbit([]byte(`{"x":1}`)); err != ErrRabbitDisabled {
+		t.Errorf("PublishToRabbit while disabled returned %v, want ErrRabbitDisabled", err)
 	}
 
 	setRabbitConnection(nil, nil, true)
@@ -77,15 +78,16 @@ func TestRabbitConnectionSwapConcurrent(t *testing.T) {
 		}
 	}()
 
-	// Publisher goroutines: what `go sendToGlobalRabbit(...)` in wmiau.go
-	// does on every event.
+	// Publisher goroutines: what `trackBackground(sendToGlobalRabbit)` in
+	// wmiau.go does on every event. While disabled every publish must fail
+	// with the sentinel (never nil-channel deref, never silent success).
 	for g := 0; g < 8; g++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				if err := PublishToRabbit([]byte(`{"type":"Message"}`)); err != nil {
-					t.Errorf("PublishToRabbit returned %v, want nil", err)
+				if err := PublishToRabbit([]byte(`{"type":"Message"}`)); err != ErrRabbitDisabled {
+					t.Errorf("PublishToRabbit returned %v, want ErrRabbitDisabled", err)
 					return
 				}
 				_ = rabbitIsEnabled()

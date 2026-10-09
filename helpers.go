@@ -326,10 +326,12 @@ func callHook(myurl string, payload map[string]string, userID string) {
 		}
 
 		log.Info().Int("status", resp.StatusCode()).Str("url", myurl).Msg("Webhook call successful")
+		deliveryStats.webhookSent.Add(1)
 		return
 	}
 
 	if lastError != nil {
+		deliveryStats.webhookFailed.Add(1)
 		log.Error().Str("url", myurl).Msg("Webhook permanently failed after all retries. Sending to error queue...")
 
 		errorPayloadMap := make(map[string]interface{})
@@ -351,7 +353,9 @@ func callHook(myurl string, payload map[string]string, userID string) {
 			ErrorMessage: lastError.Error(),
 		}
 
-		PublishDataErrorToQueue(errorPayload)
+		// Se o Rabbit estiver fora, o payload é preservado em disco
+		// (dbdata/webhook_errors) em vez de descartado silenciosamente.
+		preserveDLQ("data", func() error { return PublishDataErrorToQueue(errorPayload) }, userID, errorPayload)
 	}
 }
 
@@ -425,10 +429,12 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 		}
 
 		log.Info().Int("status", resp.StatusCode()).Str("url", myurl).Msg("File webhook call successful")
+		deliveryStats.webhookSent.Add(1)
 		return nil
 	}
 
 	if lastError != nil {
+		deliveryStats.webhookFailed.Add(1)
 		log.Error().Str("url", myurl).Msg("File webhook permanently failed after all retries. Sending to error queue...")
 
 		errorPayloadMap := make(map[string]interface{})
@@ -445,7 +451,9 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 			ErrorMessage: lastError.Error(),
 		}
 
-		PublishFileErrorToQueue(errorPayload)
+		// Se o Rabbit estiver fora, o payload é preservado em disco
+		// (dbdata/webhook_errors) em vez de descartado silenciosamente.
+		preserveDLQ("file", func() error { return PublishFileErrorToQueue(errorPayload) }, userID, errorPayload)
 
 		return fmt.Errorf("webhook failed permanently: %w", lastError)
 	}

@@ -56,6 +56,8 @@ func (s *server) GetHealth() http.HandlerFunc {
 		MemoryStats       map[string]interface{} `json:"memory_stats"`
 		GoRoutines        int                    `json:"goroutines"`
 		Version           string                 `json:"version,omitempty"`
+		RabbitEnabled     bool                   `json:"rabbit_enabled"`
+		Delivery          map[string]uint64      `json:"delivery"`
 	}
 
 	startTime := time.Now()
@@ -110,6 +112,16 @@ func (s *server) GetHealth() http.HandlerFunc {
 			MemoryStats:       memoryStats,
 			GoRoutines:        runtime.NumGoroutine(),
 			Version:           version,
+			RabbitEnabled:     rabbitIsEnabled(),
+			Delivery: map[string]uint64{
+				"webhook_sent":     deliveryStats.webhookSent.Load(),
+				"webhook_failed":   deliveryStats.webhookFailed.Load(),
+				"rabbit_published": deliveryStats.rabbitPublished.Load(),
+				"rabbit_failed":    deliveryStats.rabbitFailed.Load(),
+				"rabbit_disabled":  deliveryStats.rabbitDisabled.Load(),
+				"dlq_rabbit":       deliveryStats.dlqRabbit.Load(),
+				"dlq_disk":         deliveryStats.dlqDiskFallback.Load(),
+			},
 		}
 
 		w.Header().Set("Content-Type", "application/json")

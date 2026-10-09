@@ -57,6 +57,8 @@ var (
 	webhookRetryDelaySeconds = flag.Int("retrydelay", 30, "Delay in seconds between webhook retries")
 	webhookErrorQueueName    = flag.String("errorqueue", "webhook_errors", "RabbitMQ queue name for failed webhooks")
 
+	shutdownTimeoutSeconds = flag.Int("shutdowntimeout", 30, "Max seconds to wait for in-flight webhook/Rabbit deliveries on shutdown")
+
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
 	userinfocache    = cache.New(1*time.Hour, 30*time.Minute)
@@ -226,12 +228,19 @@ func main() {
 	if v := os.Getenv("WEBHOOK_ERROR_QUEUE_NAME"); v != "" {
 		*webhookErrorQueueName = v
 	}
+	if v := os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 600 {
+			*shutdownTimeoutSeconds = n
+		}
+	}
 
 	log.Info().
 		Bool("enabled", *webhookRetryEnabled).
 		Int("count", *webhookRetryCount).
 		Int("delay", *webhookRetryDelaySeconds).
 		Str("queue", *webhookErrorQueueName).
+		Str("dlq_spool_dir", dlqSpoolDir()).
+		Int("shutdown_timeout", *shutdownTimeoutSeconds).
 		Msg("Webhook Retry Configured")
 
 	// Novo bloco para sobrescrever o osName pelo ENV, se existir
@@ -466,6 +475,17 @@ func startHTTPMode(s *server) {
 				if err := srv.Shutdown(ctx); err != nil {
 					log.Error().Err(err).Msg("Failed to stop server")
 					os.Exit(1)
+				}
+
+				// Aguarda entregas em voo (webhooks em retry/backoff,
+				// publishes Rabbit) até o timeout configurado. Sem isso,
+				// mensagens em retry são abortadas no shutdown.
+				waitTimeout := time.Duration(*shutdownTimeoutSeconds) * time.Second
+				log.Info().Dur("timeout", waitTimeout).Msg("Waiting for in-flight webhook/Rabbit deliveries...")
+				if waitBackground(waitTimeout) {
+					log.Info().Msg("All in-flight deliveries completed")
+				} else {
+					log.Warn().Dur("timeout", waitTimeout).Msg("Shutdown timeout reached with deliveries still in flight (failed webhooks were preserved via DLQ/disk spool)")
 				}
 
 				log.Info().Msg("Server Exited Properly")
