@@ -57,14 +57,10 @@ var (
 	sslcert             = flag.String("sslcertificate", "", "SSL Certificate File")
 	sslprivkey          = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
 	adminToken          = flag.String("admintoken", "", "Security Token to authorize admin actions (list/create/remove users)")
-	globalEncryptionKey = flag.String("globalencryptionkey", "", "Encryption key for sensitive data (32 bytes)")
-	globalHMACKey       = flag.String("globalhmackey", "", "Global HMAC key for webhook signing")
 	globalWebhook       = flag.String("globalwebhook", "", "Global webhook URL to receive all events from all users")
 	versionFlag         = flag.Bool("version", false, "Display version information and exit")
 	mode                = flag.String("mode", "http", "Server mode: http or stdio")
 	dataDir             = flag.String("datadir", "", "Data directory for database and session files (defaults to executable directory)")
-
-	globalHMACKeyEncrypted []byte
 
 	webhookRetryEnabled      = flag.Bool("webhookretry", true, "Enable webhook retry mechanism")
 	webhookRetryCount        = flag.Int("retrycount", 5, "Number of times to retry failed webhooks")
@@ -335,23 +331,6 @@ func main() {
 		}
 	}
 
-	if *globalEncryptionKey == "" {
-		if v := os.Getenv("WUZAPI_GLOBAL_ENCRYPTION_KEY"); v != "" {
-			*globalEncryptionKey = v
-			log.Info().Msg("Encryption key loaded from environment variable")
-		} else {
-			// Generate a random key if none provided
-			const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-			b := make([]byte, 32)
-			for i := range b {
-				b[i] = charset[rand.Intn(len(charset))]
-			}
-			*globalEncryptionKey = string(b)
-			log.Warn().Str("global_encryption_key", *globalEncryptionKey).Msg("No WUZAPI_GLOBAL_ENCRYPTION_KEY provided, generated a random one. " +
-				"SAVE THIS KEY TO YOUR .ENV FILE OR ALL ENCRYPTED DATA WILL BE LOST ON RESTART!")
-		}
-	}
-
 	// Check for global webhook in environment variable
 	if *globalWebhook == "" {
 		if v := os.Getenv("WUZAPI_GLOBAL_WEBHOOK"); v != "" {
@@ -360,33 +339,6 @@ func main() {
 		}
 	} else {
 		log.Info().Str("global_webhook", *globalWebhook).Msg("Global webhook configured from command line")
-	}
-
-	// Check for global HMAC key in environment variable
-	if *globalHMACKey == "" {
-		if v := os.Getenv("WUZAPI_GLOBAL_HMAC_KEY"); v != "" {
-			*globalHMACKey = v
-			log.Info().Msg("Global HMAC key configured from environment variable")
-		} else {
-			// Generate a random key if none provided
-			const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-			b := make([]byte, 32)
-			for i := range b {
-				b[i] = charset[rand.Intn(len(charset))]
-			}
-			*globalHMACKey = string(b)
-			log.Warn().Str("global_hmac_key", *globalHMACKey).Msg("No WUZAPI_GLOBAL_HMAC_KEY provided, generated a random one")
-		}
-
-	} else {
-		log.Info().Msg("Global HMAC key configured from command line")
-	}
-
-	globalHMACKeyEncrypted, err = encryptHMACKey(*globalHMACKey)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to encrypt global HMAC key")
-	} else {
-		log.Info().Msg("Global HMAC key encrypted successfully")
 	}
 
 	InitRabbitMQ()

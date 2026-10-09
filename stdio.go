@@ -269,15 +269,6 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "session.proxy":
 		httpMethod = "POST"
 		httpPath = "/session/proxy"
-	case "session.hmac.config":
-		httpMethod = "POST"
-		httpPath = "/session/hmac/config"
-	case "session.hmac.config.get":
-		httpMethod = "GET"
-		httpPath = "/session/hmac/config"
-	case "session.hmac.config.delete":
-		httpMethod = "DELETE"
-		httpPath = "/session/hmac/config"
 
 	// Messaging
 	case "chat.send.text":

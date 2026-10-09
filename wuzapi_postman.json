@@ -1,4 +1,4 @@
-{
+﻿{
   "info": {
     "_postman_id": "b275f9a7-7fd5-4197-b5de-4e3a9c9d2d78",
     "name": "WuzAPI Complete Collection",
@@ -319,76 +319,6 @@
             "description": "Remove S3 configuration"
           },
           "response": []
-        },
-        {
-          "name": "HMAC Configuration",
-          "item": [
-            {
-              "name": "Configure HMAC Key",
-              "request": {
-                "method": "POST",
-                "header": [
-                  {
-                    "key": "token",
-                    "value": "{{token}}"
-                  },
-                  {
-                    "key": "Content-Type",
-                    "value": "application/json"
-                  }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"hmac_key\": \"your_hmac_key_minimum_32_characters_long_here\"\n}"
-                },
-                "url": {
-                  "raw": "{{baseUrl}}/session/hmac/config",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["session", "hmac", "config"]
-                },
-                "description": "Configure HMAC key for webhook signing"
-              },
-              "response": []
-            },
-            {
-              "name": "Get HMAC Configuration",
-              "request": {
-                "method": "GET",
-                "header": [
-                  {
-                    "key": "token",
-                    "value": "{{token}}"
-                  }
-                ],
-                "url": {
-                  "raw": "{{baseUrl}}/session/hmac/config",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["session", "hmac", "config"]
-                },
-                "description": "Get HMAC configuration status"
-              },
-              "response": []
-            },
-            {
-              "name": "Delete HMAC Configuration",
-              "request": {
-                "method": "DELETE",
-                "header": [
-                  {
-                    "key": "token",
-                    "value": "{{token}}"
-                  }
-                ],
-                "url": {
-                  "raw": "{{baseUrl}}/session/hmac/config",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["session", "hmac", "config"]
-                },
-                "description": "Delete HMAC configuration"
-              },
-              "response": []
-            }
-          ]
         }
       ]
     },
@@ -718,7 +648,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"Phone\": \"5491155553935\",\n  \"PackName\": \"My Pack\",\n  \"PackPublisher\": \"Wuzapi\",\n  \"Emojis\": [\"😂\", \"😍\", \"👍\", \"🎉\"],\n  \"Sticker\": \"data:image/webp;base64,/9j/\"\n}"
+              "raw": "{\n  \"Phone\": \"5491155553935\",\n  \"PackName\": \"My Pack\",\n  \"PackPublisher\": \"Wuzapi\",\n  \"Emojis\": [\"ðŸ˜‚\", \"ðŸ˜\", \"ðŸ‘\", \"ðŸŽ‰\"],\n  \"Sticker\": \"data:image/webp;base64,/9j/\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/chat/send/sticker",
@@ -853,7 +783,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"Phone\": \"5491155553935\",\n  \"Body\": \"❤️\",\n  \"Id\": \"me:3EB06F9067F80BAB89FF\"\n}"
+              "raw": "{\n  \"Phone\": \"5491155553935\",\n  \"Body\": \"â¤ï¸\",\n  \"Id\": \"me:3EB06F9067F80BAB89FF\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/chat/react",

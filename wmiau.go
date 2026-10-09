@@ -98,15 +98,11 @@ func sendToGlobalWebHook(jsonData []byte, token string, userID string) {
 			"userID":       userID,
 			"instanceName": instance_name,
 		}
-		callHookWithHmac(*globalWebhook, globalData, userID, globalHMACKeyEncrypted)
+		callHook(*globalWebhook, globalData, userID)
 	}
 }
 
 func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID string, token string) {
-	sendToUserWebHookWithHmac(webhookurl, path, jsonData, userID, token, nil)
-}
-
-func sendToUserWebHookWithHmac(webhookurl string, path string, jsonData []byte, userID string, token string, encryptedHmacKey []byte) {
 
 	instance_name := ""
 	userinfo, found := userinfocache.Get(token)
@@ -128,14 +124,14 @@ func sendToUserWebHookWithHmac(webhookurl string, path string, jsonData []byte, 
 			go func() {
 				release := webhookAcquire(userID)
 				defer release()
-				callHookWithHmac(webhookurl, data, userID, encryptedHmacKey)
+				callHook(webhookurl, data, userID)
 			}()
 		} else {
 			// Chamar em background para não bloquear o handler
 			go func() {
 				release := webhookAcquire(userID)
 				defer release()
-				if err := callHookFileWithHmac(webhookurl, data, userID, path, encryptedHmacKey); err != nil {
+				if err := callHookFile(webhookurl, data, userID, path); err != nil {
 					log.Error().Err(err).Msg("Error calling hook file")
 				}
 			}()
@@ -203,15 +199,14 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 		return
 	}
 
-	// Prepare webhook data early para que os sinks globais não dependam da
-	// assinatura do usuário (observabilidade de Undecryptable, falhas etc.).
+	// Prepare webhook data early para observabilidade (Undecryptable, falhas etc.).
 	jsonData, err := json.Marshal(postmap)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal postmap to JSON")
 		return
 	}
 
-	// Sinks globais sempre recebem, mesmo sem assinatura do usuário.
+	// Sinks globais sempre recebem.
 	// (No modo stdio não há webhook HTTP/Rabbit: só notificação abaixo.)
 	if mycli.s == nil || mycli.s.mode != Stdio {
 		go sendToGlobalWebHook(jsonData, mycli.token, mycli.userID)
@@ -245,20 +240,7 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 
 	webhookurl := getUserWebhookUrl(mycli)
 
-	// Get HMAC key for this user
-	var encryptedHmacKey []byte
-	if userinfo, found := userinfocache.Get(mycli.token); found {
-		encryptedB64 := userinfo.(Values).Get("HmacKeyEncrypted")
-		if encryptedB64 != "" {
-			var err error
-			encryptedHmacKey, err = base64.StdEncoding.DecodeString(encryptedB64)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to decode HMAC key from cache")
-			}
-		}
-	}
-
-	sendToUserWebHookWithHmac(webhookurl, path, jsonData, mycli.userID, mycli.token, encryptedHmacKey)
+	sendToUserWebHook(webhookurl, path, jsonData, mycli.userID, mycli.token)
 }
 
 func checkIfSubscribedToEvent(subscribedEvents []string, eventType string, userId string) bool {
@@ -275,7 +257,7 @@ func checkIfSubscribedToEvent(subscribedEvents []string, eventType string, userI
 
 // Connects to Whatsapp Websocket on server startup if last state was connected
 func (s *server) connectOnStartup() {
-	rows, err := s.db.Queryx("SELECT id,name,token,jid,webhook,events,proxy_url,CASE WHEN s3_enabled THEN 'true' ELSE 'false' END AS s3_enabled,media_delivery,COALESCE(history, 0) as history,hmac_key FROM users WHERE connected=1")
+	rows, err := s.db.Queryx("SELECT id,name,token,jid,webhook,events,proxy_url,CASE WHEN s3_enabled THEN 'true' ELSE 'false' END AS s3_enabled,media_delivery,COALESCE(history, 0) as history FROM users WHERE connected=1")
 	if err != nil {
 		log.Error().Err(err).Msg("DB Problem")
 		return
@@ -292,30 +274,23 @@ func (s *server) connectOnStartup() {
 		s3_enabled := ""
 		media_delivery := ""
 		var history int
-		var hmac_key []byte
-		err = rows.Scan(&txtid, &name, &token, &jid, &webhook, &events, &proxy_url, &s3_enabled, &media_delivery, &history, &hmac_key)
+		err = rows.Scan(&txtid, &name, &token, &jid, &webhook, &events, &proxy_url, &s3_enabled, &media_delivery, &history)
 		if err != nil {
 			log.Error().Err(err).Msg("DB Problem")
 			return
 		} else {
-			hmacKeyEncrypted := ""
-			if len(hmac_key) > 0 {
-				hmacKeyEncrypted = base64.StdEncoding.EncodeToString(hmac_key)
-			}
-
 			log.Info().Str("token", token).Msg("Connect to Whatsapp on startup")
 			v := Values{map[string]string{
-				"Id":               txtid,
-				"Name":             name,
-				"Jid":              jid,
-				"Webhook":          webhook,
-				"Token":            token,
-				"Proxy":            proxy_url,
-				"Events":           events,
-				"S3Enabled":        s3_enabled,
-				"MediaDelivery":    media_delivery,
-				"History":          fmt.Sprintf("%d", history),
-				"HmacKeyEncrypted": hmacKeyEncrypted,
+				"Id":            txtid,
+				"Name":          name,
+				"Jid":           jid,
+				"Webhook":       webhook,
+				"Token":         token,
+				"Proxy":         proxy_url,
+				"Events":        events,
+				"S3Enabled":     s3_enabled,
+				"MediaDelivery": media_delivery,
+				"History":       fmt.Sprintf("%d", history),
 			}}
 			userinfocache.Set(token, v, cache.NoExpiration)
 			// Gets and set subscription to webhook events

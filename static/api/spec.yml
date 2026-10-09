@@ -1,4 +1,4 @@
-openapi: 3.0.0
+﻿openapi: 3.0.0
 info:
   title: WUZAPI
   description: "WUZAPI implements a multi user and multi device REST API for WhatsApp.\n\n<h2>Authentication</h2><ul><li>Standard Endpoints: Include the token header with a valid user token (matches tokens stored in the users database table).</li><li>Admin Endpoints: Use the Authorization header with the admin token (set in .env as WUZAPI_ADMIN_TOKEN).</li></ul><h2>Admin Setup:</h2>You can manage users and do some tests by using the builtin dashboard [here](/dashboard).<h3>Add a Sample User via API</h3>Run this command to create a test user:<pre><code>curl -X POST http://localhost:8080/admin/users \\ \n-H \"Authorization: $WUZAPI_ADMIN_TOKEN\" \\ \n-H \"Content-Type: application/json\" \\ \n-d '{\"name\": \"John\", \"token\": \"Z1234ABCCXD\"}' </code> </pre>\n\n<h2>Webhook Configuration</h2>To receive WhatsApp messages:<ul><li>Host your own server (to process incoming messages).</li><li>Set its URL as the webhook via the [webhook](#Webhook) API call.</li></ul><h2>Phone number format:</h2><ul><li>Required: Country code (e.g. <b>5491155553934</b> for Argentina</li><li>Do not prefix with a plus sign (+), as natively whatsapp requires no plus sign prefix.</li></ul>"
@@ -667,68 +667,6 @@ paths:
           description: Bad request or session not connected
         '500':
           description: Internal server error
-  /session/hmac/config:
-    post:
-      tags:
-        - Session 
-      summary: Configure HMAC key for webhook signing
-      description: "Sets HMAC key for webhook signature verification. Once configured, all webhooks will include x-hmac-signature header.\n\n**Security Notes:**\n- HMAC key must be at least 32 characters long\n- Key cannot be retrieved after saving\n- To update key, send new request with new key"
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                hmac_key:
-                  type: string
-                  description: HMAC key for webhook signing (min 32 chars)
-                  example: "your_hmac_key_minimum_32_characters_long_here"
-              required:
-                - hmac_key
-      responses:
-        200:
-          description: HMAC configuration saved
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "Details": "HMAC configuration saved successfully" }, "success": true }
-        400:
-          description: Invalid HMAC key
-          content:
-            application/json:
-              schema:
-                example: { "code": 400, "data": "HMAC key must be at least 32 characters long", "success": false }
-    get:
-      tags:
-        - Session 
-      summary: Get HMAC configuration status
-      description: "Retrieves HMAC configuration status. For security reasons, the actual key is never returned - only masked with '***' if configured."
-      security:
-        - ApiKeyAuth: []
-      responses:
-        200:
-          description: HMAC status
-          content:
-            application/json:
-              schema:
-                example: { "hmac_key": "***" }
-    delete:
-      tags:
-        - Session 
-      summary: Delete HMAC configuration
-      description: "Removes HMAC configuration and disables webhook signing."
-      security:
-        - ApiKeyAuth: []
-      responses:
-        200:
-          description: HMAC configuration removed
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "Details": "HMAC configuration deleted successfully" }, "success": true }
   /user/info:
     post:
       tags:
@@ -751,7 +689,7 @@ paths:
           content:
             application/json:
               schema:
-                example: { "code": 200, "data": { "Users": { "5491155553935@s.whatsapp.net": { "Devices": [], "PictureID": "", "Status": "", "VerifiedName": null }, "5491155553934@s.whatsapp.net": { "Devices": [ "5491155553934.0:0@s.whatsapp.net", "5491155955934.0:6@s.whatsapp.net", ], "PictureID": "1582328807", "Status": "🇦🇷", "VerifiedName": null } } }, "success": true } 
+                example: { "code": 200, "data": { "Users": { "5491155553935@s.whatsapp.net": { "Devices": [], "PictureID": "", "Status": "", "VerifiedName": null }, "5491155553934@s.whatsapp.net": { "Devices": [ "5491155553934.0:0@s.whatsapp.net", "5491155955934.0:6@s.whatsapp.net", ], "PictureID": "1582328807", "Status": "ðŸ‡¦ðŸ‡·", "VerifiedName": null } } }, "success": true } 
   /user/check:
     post:
       tags:
@@ -2335,7 +2273,7 @@ definitions:
         example: "5491155553935"
       Body:
         type: string
-        example: "❤️"
+        example: "â¤ï¸"
       Id:
         type: string
         example: "me:3EB06F9067F80BAB89FF"
@@ -2565,7 +2503,7 @@ definitions:
         type: array
         items:
           type: string
-        example: ["😀", "🎉"]
+        example: ["ðŸ˜€", "ðŸŽ‰"]
       ContextInfo:
         $ref: "#/definitions/ContextInfo"
         description: "Optional context info for replies, mentions, and forwarding"

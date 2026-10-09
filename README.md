@@ -20,27 +20,6 @@ Be very careful—do not use this to send SPAM or anything similar. Use at your 
 * **Chat:** Set presence (typing/paused, recording media), mark messages as read, download images from messages, send reactions.
 * **Groups:** Create, delete and list groups, get info, get invite links, set participants, change group photos and names.
 * **Webhooks:** Set and get webhooks that will be called whenever events or messages are received.
-* **HMAC Configuration:** Configure HMAC keys for webhook security and signature verification.
-
-### Webhook HMAC Signing
-
-When HMAC is configured, all webhooks include an `x-hmac-signature` header with SHA-256 HMAC signature.
-
-#### Signature Generation by Content-Type:
-
-**`application/json`**
-* Signed data: Raw JSON request body
-* Verification: Use the exact JSON received
-
-**`application/x-www-form-urlencoded`**
-* Signed data: URL-encoded form string (`key=value&key2=value2`)
-* Verification: Reconstruct the form string from received parameters
-
-**`multipart/form-data`** (file uploads)
-* Signed data: JSON representation of form fields (excluding files)
-* Verification: Create JSON from non-file form fields
-
-* Always verify signatures before processing webhooks
 
 ## Prerequisites
 
@@ -124,13 +103,6 @@ cp .env.sample .env
 WUZAPI_ADMIN_TOKEN=your_admin_token_here
 ```
 
-#### Security Settings
-
-```
-WUZAPI_GLOBAL_ENCRYPTION_KEY=your_32_byte_encryption_key_here
-WUZAPI_GLOBAL_HMAC_KEY=your_global_hmac_key_here
-```
-
 #### Optional Settings
 
 ```
@@ -148,14 +120,10 @@ WEBHOOK_ERROR_QUEUE_NAME=wuzapi_dead_letter_webhooks
 ### Important Notes
 
 #### Auto-Generated Credentials
-If the following settings are not provided, they will be auto-generated:
+If the following setting is not provided, it will be auto-generated:
 * `WUZAPI_ADMIN_TOKEN`: Random 32-character token
-* `WUZAPI_GLOBAL_ENCRYPTION_KEY`: Random 32-byte key for AES-256 encryption
 
-**Important**: Save auto-generated credentials to your `.env` file or you will lose access to encrypted data and admin functions on restart!
-
-#### Webhook Security
-* `WUZAPI_GLOBAL_HMAC_KEY`: Global HMAC key for webhook signing (minimum 32 characters)
+**Important**: Save the auto-generated admin token to your `.env` file or you will lose access to admin functions on restart!
 
 #### Database Configuration
 
@@ -197,19 +165,6 @@ When enabled:
 * Events will include the userId and instanceName
 * This works alongside webhook configurations - events will be sent to both RabbitMQ and any configured webhooks
 * The integration is global and affects all instances
-
-### Webhook Security with HMAC
-
-WuzAPI supports HMAC signatures for webhook verification:
-
-* **Per-instance HMAC**: Configure unique HMAC keys for each user instance
-* **Global HMAC**: Set a global HMAC key via `WUZAPI_GLOBAL_HMAC_KEY` environment variable
-* **Signature Header**: All signed webhooks include `x-hmac-signature` header
-* **Key Security**: HMAC keys are never exposed after configuration
-
-**Priority**: Instance HMAC > Global HMAC > No signature
-
-Configure HMAC keys via the Dashboard or using the `/session/hmac/config` API endpoints.
 
 #### Key configuration options:
 
