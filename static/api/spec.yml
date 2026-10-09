@@ -133,16 +133,6 @@ paths:
                   proxy_config:
                     enabled: true
                     proxy_url: "https://serverproxy.com:9080"
-                  s3_config:
-                    enabled: true
-                    endpoint: "https://s3.amazonaws.com"
-                    region: "us-east-1"
-                    bucket: "my-bucket"
-                    access_key: "***"
-                    path_style: true
-                    public_url: "https://s3.amazonaws.com"
-                    media_delivery: "both"
-                    retention_days: 30
                   history: 0
   /admin/users/{id}:
     get:
@@ -193,8 +183,8 @@ paths:
     delete:
       tags:
         - Admin
-      summary: Delete a user from DB and S3, logout and disconnect from whatsapp and clear it up from memory
-      description: Deletes a user by their ID, including login out, disconnect and memory cleanup Also removes all user files from S3.
+      summary: Delete a user from DB, logout and disconnect from whatsapp and clear it up from memory
+      description: Deletes a user by their ID, including login out, disconnect and memory cleanup.
       security:
         - AdminAuth: []
       parameters:
@@ -481,85 +471,6 @@ paths:
           description: Bad Request
         "500":
           description: Internal Server Error
-  /session/s3/config:
-    post:
-      tags:
-        - Session
-      summary: Configure S3 Storage
-      description: |
-        Configures S3 storage settings for the user to store media files.
-        Supports AWS S3, MinIO, Backblaze B2, and other S3-compatible services.
-        When enabled, media files will be uploaded to S3 and can be accessed via public URLs.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/definitions/S3Config'
-      responses:
-        200:
-          description: S3 configuration saved successfully
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "Details": "S3 configuration saved successfully", "Enabled": true }, "success": true }
-        400:
-          description: Bad Request
-        500:
-          description: Internal Server Error
-    get:
-      tags:
-        - Session
-      summary: Get S3 Configuration
-      description: Retrieves the current S3 storage configuration for the user.
-      security:
-        - ApiKeyAuth: []
-      responses:
-        200:
-          description: S3 configuration retrieved successfully
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "enabled": true, "endpoint": "https://s3.amazonaws.com", "region": "us-east-1", "bucket": "my-bucket", "access_key": "***", "path_style": false, "public_url": "", "media_delivery": "both", "retention_days": 30 }, "success": true }
-        500:
-          description: Internal Server Error
-    delete:
-      tags:
-        - Session
-      summary: Delete S3 Configuration
-      description: Removes the S3 storage configuration for the user and reverts to default base64 media delivery.
-      security:
-        - ApiKeyAuth: []
-      responses:
-        200:
-          description: S3 configuration deleted successfully
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "Details": "S3 configuration deleted successfully" }, "success": true }
-        500:
-          description: Internal Server Error
-  /session/s3/test:
-    post:
-      tags:
-        - Session
-      summary: Test S3 Connection
-      description: Tests the S3 connection using the current configuration to ensure it's working properly.
-      security:
-        - ApiKeyAuth: []
-      responses:
-        200:
-          description: S3 connection test successful
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "Details": "S3 connection test successful", "Bucket": "my-bucket", "Region": "us-east-1" }, "success": true }
-        400:
-          description: S3 is not enabled or configuration error
-        500:
-          description: S3 connection test failed
   /session/history:
     get:
       tags:
@@ -1975,36 +1886,6 @@ definitions:
           proxy_url:
             type: string
             example: "https://serverproxy.com:9080"
-      s3_config:
-        type: object
-        properties:
-          enabled:
-            type: boolean
-            example: true
-          endpoint:
-            type: string
-            example: "https://s3.amazonaws.com"
-          region:
-            type: string
-            example: "us-east-1"
-          bucket:
-            type: string
-            example: "my-bucket"
-          access_key:
-            type: string
-            example: "***"
-          path_style:
-            type: boolean
-            example: true
-          public_url:
-            type: string
-            example: "https://s3.amazonaws.com"
-          media_delivery:
-            type: string
-            example: "both"
-          retention_days:
-            type: integer
-            example: 30
 
   CreateUser:
     type: object
@@ -2037,44 +1918,6 @@ definitions:
             type: string
             example: "https://serverproxy.com:9080"
             description: "Proxy URL to use for the user. Format: socks5://user:pass@host:port or http://host:port"
-      s3Config:
-        type: object
-        properties:
-          enabled:
-            type: boolean
-            example: true
-            description: "Enable S3 for the user, default is false"
-          endpoint:
-            type: string
-            example: "https://s3.amazonaws.com"
-          region:
-            type: string
-            example: "us-east-1"
-          bucket:
-            type: string
-            example: "my-bucket"
-          accessKey:
-            type: string
-            example: "1234567890"
-          secretKey:
-            type: string
-            example: "1234567890"
-          pathStyle:
-            type: boolean
-            example: true
-            description: "Enable path style for the user, default is false"
-          publicURL:
-            type: string
-            example: "https://s3.amazonaws.com"
-            description: "Public URL for the user"
-          mediaDelivery:
-            type: string
-            example: "both"
-            description: "Media delivery type for the user, default is both"
-          retentionDays:
-            type: integer
-            example: 30
-            description: "Retention days for the user, default is 30"
       history:
         type: integer
         example: 0
@@ -2835,51 +2678,6 @@ definitions:
         type: string
         description: The JID of the group to remove the photo from
         example: "120363312246943103@g.us"
-
-  S3Config:
-    type: object
-    properties:
-      enabled:
-        type: boolean
-        description: Whether S3 storage is enabled
-        example: true
-      endpoint:
-        type: string
-        description: S3 endpoint URL (leave empty for AWS S3)
-        example: "https://s3.amazonaws.com"
-      region:
-        type: string
-        description: S3 region
-        example: "us-east-1"
-      bucket:
-        type: string
-        description: S3 bucket name
-        example: "my-whatsapp-media"
-      access_key:
-        type: string
-        description: S3 access key ID
-        example: "AKIAIOSFODNN7EXAMPLE"
-      secret_key:
-        type: string
-        description: S3 secret access key
-        example: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-      path_style:
-        type: boolean
-        description: Use path-style URLs (required for MinIO)
-        example: false
-      public_url:
-        type: string
-        description: Custom public URL for accessing files (optional, for CDN)
-        example: "https://cdn.example.com"
-      media_delivery:
-        type: string
-        description: Media delivery method
-        enum: ["base64", "s3", "both"]
-        example: "both"
-      retention_days:
-        type: integer
-        description: Number of days to retain files (0 for no expiration)
-        example: 30
 
 components:
   securitySchemes:

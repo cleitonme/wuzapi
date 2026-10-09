@@ -28,19 +28,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ServerMode represents the server operating mode
-type ServerMode int
-
-const (
-	HTTP ServerMode = iota
-	Stdio
-)
-
 type server struct {
 	db     *sqlx.DB
 	router *mux.Router
 	exPath string
-	mode   ServerMode
 }
 
 // Replace the global variables
@@ -59,7 +50,6 @@ var (
 	adminToken          = flag.String("admintoken", "", "Security Token to authorize admin actions (list/create/remove users)")
 	globalWebhook       = flag.String("globalwebhook", "", "Global webhook URL to receive all events from all users")
 	versionFlag         = flag.Bool("version", false, "Display version information and exit")
-	mode                = flag.String("mode", "http", "Server mode: http or stdio")
 	dataDir             = flag.String("datadir", "", "Data directory for database and session files (defaults to executable directory)")
 
 	webhookRetryEnabled      = flag.Bool("webhookretry", true, "Enable webhook retry mechanism")
@@ -259,11 +249,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	// In stdio mode, always log to stderr to avoid interfering with JSON responses on stdout
 	logOutput := os.Stdout
-	if *mode == "stdio" {
-		logOutput = os.Stderr
-	}
 
 	if *logType == "json" {
 		log.Logger = zerolog.New(logOutput).
@@ -439,26 +425,16 @@ func main() {
 		}
 	}()
 
-	serverMode := HTTP
-	if *mode == "stdio" {
-		serverMode = Stdio
-	}
-
 	s := &server{
 		router: mux.NewRouter(),
 		db:     db,
 		exPath: exPath,
-		mode:   serverMode,
 	}
 	s.routes()
 
 	s.connectOnStartup()
 
-	if serverMode == Stdio {
-		startStdioMode(s)
-	} else {
-		startHTTPMode(s)
-	}
+	startHTTPMode(s)
 }
 
 func startHTTPMode(s *server) {
@@ -520,13 +496,4 @@ func startHTTPMode(s *server) {
 	}()
 	log.Info().Str("address", *address).Str("port", *port).Msg("Server started. Waiting for connections...")
 	select {}
-}
-
-func startStdioMode(s *server) {
-	stdioServer := NewStdioServer(s)
-	if err := stdioServer.Start(); err != nil {
-		log.Error().Err(err).Msg("Stdio server error")
-		os.Exit(1)
-	}
-	log.Info().Msg("Stdio server exited properly")
 }

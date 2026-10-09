@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -146,7 +146,6 @@ func (s *server) authalice(next http.Handler) http.Handler {
 		qrcode := ""
 
 		var history sql.NullInt64
-		var s3Enabled, mediaDelivery string
 
 		// Get token
 		token := r.Header.Get("token")
@@ -154,13 +153,13 @@ func (s *server) authalice(next http.Handler) http.Handler {
 			token = strings.Join(r.URL.Query()["token"], "")
 		}
 
-		// 🔥 tenta cache primeiro
+		// ðŸ”¥ tenta cache primeiro
 		myuserinfo, found := userinfocache.Get(token)
 		if !found {
 
 			log.Info().Msg("Looking for user information in DB")
 
-			// 🔥 QueryRow (sem loop)
+			// ðŸ”¥ QueryRow (sem loop)
 			err := s.db.QueryRow(`
 				SELECT
 					id,
@@ -170,9 +169,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 					events,
 					proxy_url,
 					qrcode,
-					history,
-					CASE WHEN s3_enabled THEN 'true' ELSE 'false' END,
-					COALESCE(media_delivery, 'base64')
+					history
 				FROM users
 				WHERE token=$1
 				LIMIT 1
@@ -185,8 +182,6 @@ func (s *server) authalice(next http.Handler) http.Handler {
 				&proxyURL,
 				&qrcode,
 				&history,
-				&s3Enabled,
-				&mediaDelivery,
 			)
 
 			if err == sql.ErrNoRows {
@@ -213,17 +208,15 @@ func (s *server) authalice(next http.Handler) http.Handler {
 				Msg("User authentication - history debug")
 
 			v := Values{map[string]string{
-				"Id":            txtid,
-				"Name":          name,
-				"Jid":           jid,
-				"Webhook":       webhook,
-				"Token":         token,
-				"Proxy":         proxyURL,
-				"Events":        events,
-				"Qrcode":        qrcode,
-				"History":       historyStr,
-				"S3Enabled":     s3Enabled,
-				"MediaDelivery": mediaDelivery,
+				"Id":      txtid,
+				"Name":    name,
+				"Jid":     jid,
+				"Webhook": webhook,
+				"Token":   token,
+				"Proxy":   proxyURL,
+				"Events":  events,
+				"Qrcode":  qrcode,
+				"History": historyStr,
 			}}
 
 			userinfocache.Set(token, v, cache.NoExpiration)
@@ -233,7 +226,7 @@ func (s *server) authalice(next http.Handler) http.Handler {
 			ctx = context.WithValue(r.Context(), "userinfo", v)
 
 		} else {
-			// 🔥 cache hit
+			// ðŸ”¥ cache hit
 			v := myuserinfo.(Values)
 
 			ctx = context.WithValue(r.Context(), "userinfo", v)
@@ -798,41 +791,6 @@ func (s *server) GetStatus() http.HandlerFunc {
 			"proxy_url": proxyURL,
 		}
 
-		var s3Enabled bool
-		var s3Endpoint, s3Region, s3Bucket, s3PublicURL, s3MediaDelivery string
-		var s3PathStyle bool
-		var s3RetentionDays int
-
-		// Start with safe defaults so the field is always present in the response
-		s3Config := map[string]interface{}{
-			"enabled":        false,
-			"endpoint":       "",
-			"region":         "",
-			"bucket":         "",
-			"access_key":     "***",
-			"path_style":     false,
-			"public_url":     "",
-			"media_delivery": "",
-			"retention_days": 0,
-		}
-		err := s.db.QueryRow(`SELECT COALESCE(s3_enabled, false), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''), COALESCE(s3_bucket, ''), COALESCE(s3_path_style, false), COALESCE(s3_public_url, ''), COALESCE(media_delivery, ''), COALESCE(s3_retention_days, 0) FROM users WHERE id = $1`, txtid).Scan(&s3Enabled, &s3Endpoint, &s3Region, &s3Bucket, &s3PathStyle, &s3PublicURL, &s3MediaDelivery, &s3RetentionDays)
-
-		if err == nil {
-			// Overwrite defaults with actual values if the query succeeded
-			s3Config["enabled"] = s3Enabled
-			s3Config["endpoint"] = s3Endpoint
-			s3Config["region"] = s3Region
-			s3Config["bucket"] = s3Bucket
-			s3Config["path_style"] = s3PathStyle
-			s3Config["public_url"] = s3PublicURL
-			s3Config["media_delivery"] = s3MediaDelivery
-			s3Config["retention_days"] = s3RetentionDays
-		} else {
-			if err != sql.ErrNoRows {
-				log.Warn().Err(err).Str("user_id", txtid).Msg("Failed to query S3 config for user")
-			}
-		}
-
 		response := map[string]interface{}{
 			"id":           txtid,
 			"name":         userInfo.Get("Name"),
@@ -846,7 +804,6 @@ func (s *server) GetStatus() http.HandlerFunc {
 			"qrcode":       userInfo.Get("Qrcode"),
 			"history":      userInfo.Get("History"),
 			"proxy_config": proxyConfig,
-			"s3_config":    s3Config,
 		}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -1100,7 +1057,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 				if strings.HasPrefix(strings.ToLower(ct), "audio/") {
 					mime = ct
 				}
-				// else mantém o default já definido (ogg ou mpeg)
+				// else mantÃ©m o default jÃ¡ definido (ogg ou mpeg)
 			}
 			filedata = data
 		} else {
@@ -1163,15 +1120,15 @@ func (s *server) SendStatus() http.HandlerFunc {
 	type statusStruct struct {
 		Type            string   `json:"type"`             // text | image | video | audio | myaudio | ptt
 		Text            string   `json:"text"`             // texto ou legenda
-		BackgroundColor int      `json:"background_color"` // 1–19
+		BackgroundColor int      `json:"background_color"` // 1â€“19
 		Font            int      `json:"font"`             // 0,1,2,6,7,8,9,10
 		File            string   `json:"file"`             // URL ou base64
 		Mimetype        string   `json:"mimetype"`
-		Recipients      []string `json:"recipients"`     // números, JIDs @s.whatsapp.net ou @lid
-		MaxRecipients   int      `json:"max_recipients"` // cap de segurança
+		Recipients      []string `json:"recipients"`     // nÃºmeros, JIDs @s.whatsapp.net ou @lid
+		MaxRecipients   int      `json:"max_recipients"` // cap de seguranÃ§a
 	}
 
-	// Cores ARGB reais do WhatsApp para status de texto (uint32 — bit 31 setado é alpha=FF)
+	// Cores ARGB reais do WhatsApp para status de texto (uint32 â€” bit 31 setado Ã© alpha=FF)
 	realColors := map[int]uint32{
 		1:  0xFF4C9E46, // verde musgo
 		2:  0xFF212E65, // azul escuro
@@ -1180,17 +1137,17 @@ func (s *server) SendStatus() http.HandlerFunc {
 		5:  0xFFF96900, // laranja
 		6:  0xFF5E5C5C, // cinza escuro
 		7:  0xFFD4325C, // vermelho-rosa
-		8:  0xFF0A7DA1, // azul petróleo
+		8:  0xFF0A7DA1, // azul petrÃ³leo
 		9:  0xFF7CBCDE, // azul claro
 		10: 0xFF7F3FBC, // roxo vibrante
 		11: 0xFF4C4F5B, // cinza slate
 		12: 0xFF00558F, // azul marinho
 		13: 0xFFB2235B, // magenta profundo
 		14: 0xFFE55D5D, // rosa claro
-		15: 0xFFE88A47, // salmão
+		15: 0xFFE88A47, // salmÃ£o
 		16: 0xFF7B5B3A, // marrom
 		17: 0xFF4C9E46, // (alias) verde
-		18: 0xFF7F7F7F, // cinza médio
+		18: 0xFF7F7F7F, // cinza mÃ©dio
 		19: 0xFF222222, // cinza profundo
 	}
 
@@ -1210,7 +1167,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 			return
 		}
 
-		// ── validações básicas ────────────────────────────────────────────────
+		// â”€â”€ validaÃ§Ãµes bÃ¡sicas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		validTypes := map[string]bool{
 			"text": true, "image": true, "video": true,
 			"audio": true, "myaudio": true, "ptt": true,
@@ -1233,10 +1190,10 @@ func (s *server) SendStatus() http.HandlerFunc {
 			return
 		}
 
-		// ── resolução de audiência ────────────────────────────────────────────
+		// â”€â”€ resoluÃ§Ã£o de audiÃªncia â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		statusJID := types.NewJID("status", "broadcast")
 
-		// Obtém lista completa de privacidade de status
+		// ObtÃ©m lista completa de privacidade de status
 		reqCtx := r.Context()
 
 		privacySettings, err := client.GetStatusPrivacy(reqCtx)
@@ -1244,7 +1201,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 			log.Warn().Err(err).Msg("could not get status privacy; using empty audience")
 		}
 
-		// Constrói lista base de JIDs de audiência a partir da privacidade
+		// ConstrÃ³i lista base de JIDs de audiÃªncia a partir da privacidade
 		var audienceJIDs []types.JID
 		for _, ps := range privacySettings {
 			for _, jid := range ps.List {
@@ -1262,7 +1219,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 		var statusJidList []types.JID
 
 		if len(t.Recipients) > 0 {
-			// ── modo explícito: valida cada recipient informado ───────────────
+			// â”€â”€ modo explÃ­cito: valida cada recipient informado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 			var candidates []types.JID
 			seen := map[string]bool{}
 
@@ -1278,7 +1235,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 						discarded = append(discarded, discardedEntry{raw, "invalid_format"})
 						continue
 					}
-					// tenta resolver LID → PN via cache local
+					// tenta resolver LID â†’ PN via cache local
 					resolved, resolveErr := client.Store.LIDs.GetPNForLID(reqCtx, jid)
 					if resolveErr != nil || resolved.IsEmpty() {
 						discarded = append(discarded, discardedEntry{raw, "lid_unresolved"})
@@ -1294,7 +1251,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 					}
 
 				default:
-					// número puro — assume @s.whatsapp.net
+					// nÃºmero puro â€” assume @s.whatsapp.net
 					normalized := raw + "@s.whatsapp.net"
 					jid, parseErr = types.ParseJID(normalized)
 					if parseErr != nil {
@@ -1312,7 +1269,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 				candidates = append(candidates, jid)
 			}
 
-			// verifica existência no WhatsApp em batch
+			// verifica existÃªncia no WhatsApp em batch
 			if len(candidates) > 0 {
 				onWA, checkErr := client.IsOnWhatsApp(reqCtx, func() []string {
 					nums := make([]string, len(candidates))
@@ -1331,7 +1288,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 					}
 				}
 
-				// constrói set de audiência (PN e equivalências LID conhecidas)
+				// constrÃ³i set de audiÃªncia (PN e equivalÃªncias LID conhecidas)
 				audienceSet := map[string]bool{}
 				for _, aj := range audienceJIDs {
 					audienceSet[aj.User] = true
@@ -1361,7 +1318,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 			}
 
 		} else {
-			// ── modo normal: usa audiência completa da privacidade ────────────
+			// â”€â”€ modo normal: usa audiÃªncia completa da privacidade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 			statusJidList = audienceJIDs
 		}
 
@@ -1370,7 +1327,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 			statusJidList = statusJidList[:t.MaxRecipients]
 		}
 
-		// ── constrói a mensagem por tipo ──────────────────────────────────────
+		// â”€â”€ constrÃ³i a mensagem por tipo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		msgid := client.GenerateMessageID()
 
 		var msg *waE2E.Message
@@ -1378,7 +1335,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 		switch t.Type {
 
 		case "text":
-			bgColor := realColors[19] // padrão cinza profundo
+			bgColor := realColors[19] // padrÃ£o cinza profundo
 			if c, ok := realColors[t.BackgroundColor]; ok {
 				bgColor = c
 			}
@@ -1473,8 +1430,8 @@ func (s *server) SendStatus() http.HandlerFunc {
 
 			isPTT := t.Type == "ptt" || t.Type == "myaudio"
 
-			// áudio status requer backgroundColor para aparecer no mobile
-			// se não informado, usa preto como fallback (conforme Baileys)
+			// Ã¡udio status requer backgroundColor para aparecer no mobile
+			// se nÃ£o informado, usa preto como fallback (conforme Baileys)
 			msg = &waE2E.Message{
 				AudioMessage: &waE2E.AudioMessage{
 					URL:           proto.String(uploaded.URL),
@@ -1489,7 +1446,7 @@ func (s *server) SendStatus() http.HandlerFunc {
 			}
 		}
 
-		// ── envia para status@broadcast ───────────────────────────────────────
+		// â”€â”€ envia para status@broadcast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		// O send.go do whatsmeow chama GetUserDevicesContext para todos os contatos
 		// da audiencia de uma vez. Apos restart o cache de devices esta vazio,
 		// causando um usync gigante que bate no timeout de 75s do IQ.
@@ -2203,15 +2160,15 @@ func (s *server) SendButtons() http.HandlerFunc {
 		Key          string `json:"Key"`
 		KeyType      string `json:"KeyType"` // PHONE || EMAIL || CPF || EVP
 
-		// Personalizáveis — todos opcionais
+		// PersonalizÃ¡veis â€” todos opcionais
 		Amount       *float64 `json:"Amount,omitempty"`       // valor em reais, ex: 49.90 (default: 0)
 		AmountOffset *int     `json:"AmountOffset,omitempty"` // multiplicador centavos (default: 100)
 		ReferenceID  string   `json:"ReferenceID,omitempty"`  // default: "PIX<timestamp>"
 		OrderType    string   `json:"OrderType,omitempty"`    // default: "ORDER"
 		GoodsType    string   `json:"GoodsType,omitempty"`    // default: "physical-goods"
 		ItemName     string   `json:"ItemName,omitempty"`     // nome do item na order
-		Title        string   `json:"Title,omitempty"`        // título do header da mensagem
-		Footer       string   `json:"Footer,omitempty"`       // rodapé da mensagem
+		Title        string   `json:"Title,omitempty"`        // tÃ­tulo do header da mensagem
+		Footer       string   `json:"Footer,omitempty"`       // rodapÃ© da mensagem
 		Referral     string   `json:"Referral,omitempty"`     // default: "chat_attachment"
 	}
 
@@ -2291,7 +2248,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			footer = strings.TrimSpace(t.FooterText)
 		}
 
-		// --- Destinatário ---
+		// --- DestinatÃ¡rio ---
 		recipient, ok := parseJID(t.Phone)
 		if !ok {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
@@ -2304,14 +2261,14 @@ func (s *server) SendButtons() http.HandlerFunc {
 			msgid = client.GenerateMessageID()
 		}
 
-		// --- Parse de Botões ---
-		// hasPix controla se algum botão é PIX (precisa de biz node diferente)
+		// --- Parse de BotÃµes ---
+		// hasPix controla se algum botÃ£o Ã© PIX (precisa de biz node diferente)
 		var nativeBtns []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 		hasPix := false
 
 		for _, btn := range t.Buttons {
 
-			// --- PIX (prioridade máxima) ---
+			// --- PIX (prioridade mÃ¡xima) ---
 			if btn.PixPayment != nil {
 				hasPix = true
 
@@ -2352,7 +2309,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 					referral = "chat_attachment"
 				}
 
-				// --- Título / Footer (sobrescreve campos raiz se informados no PixPayment) ---
+				// --- TÃ­tulo / Footer (sobrescreve campos raiz se informados no PixPayment) ---
 				if btn.PixPayment.Title != "" && t.Title == "" {
 					t.Title = btn.PixPayment.Title
 				}
@@ -2403,7 +2360,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 				continue
 			}
 
-			// --- Resolução de Title ---
+			// --- ResoluÃ§Ã£o de Title ---
 			title := strings.TrimSpace(btn.Title)
 			if title == "" {
 				title = strings.TrimSpace(btn.Text)
@@ -2421,7 +2378,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 				title = string(runes[:20])
 			}
 
-			// --- Resolução de ID ---
+			// --- ResoluÃ§Ã£o de ID ---
 			id := strings.TrimSpace(btn.ID)
 			if id == "" {
 				id = strings.TrimSpace(btn.ButtonId)
@@ -2433,7 +2390,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 				id = title
 			}
 
-			// --- Resolução de URL e Copy ---
+			// --- ResoluÃ§Ã£o de URL e Copy ---
 			resolvedURL := strings.TrimSpace(btn.URL)
 			if resolvedURL == "" {
 				resolvedURL = strings.TrimSpace(btn.ButtonUrl)
@@ -2444,7 +2401,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 				resolvedCopy = strings.TrimSpace(btn.ButtonCopy)
 			}
 
-			// --- Detecção de Tipo ---
+			// --- DetecÃ§Ã£o de Tipo ---
 			btnType := strings.ToLower(strings.TrimSpace(btn.Type))
 			if btnType == "" {
 				switch {
@@ -2535,7 +2492,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			}
 		}
 
-		// --- Construção do Header ---
+		// --- ConstruÃ§Ã£o do Header ---
 		header := &waE2E.InteractiveMessage_Header{}
 		if imgMsg != nil {
 			header.HasMediaAttachment = proto.Bool(true)
@@ -2547,7 +2504,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			}
 		}
 
-		// --- Construção da InteractiveMessage ---
+		// --- ConstruÃ§Ã£o da InteractiveMessage ---
 		interactiveMsg := &waE2E.InteractiveMessage{
 			Header: header,
 			Body: &waE2E.InteractiveMessage_Body{
@@ -2571,7 +2528,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 			InteractiveMessage: interactiveMsg,
 		}
 
-		// --- Biz Node: diferente para PIX vs botões normais ---
+		// --- Biz Node: diferente para PIX vs botÃµes normais ---
 		var extraNodes []waBinary.Node
 
 		if hasPix {
@@ -2588,7 +2545,7 @@ func (s *server) SendButtons() http.HandlerFunc {
 				}},
 			}}
 		} else {
-			// Botões CTA normais: native_flow com v=9 e name="mixed"
+			// BotÃµes CTA normais: native_flow com v=9 e name="mixed"
 			extraNodes = []waBinary.Node{{
 				Tag: "biz",
 				Content: []waBinary.Node{{
@@ -2633,12 +2590,12 @@ func (s *server) SendButtons() http.HandlerFunc {
 // SendList
 func (s *server) SendList() http.HandlerFunc {
 
-	// ── Input structs ────────────────────────────────────────────────────────
+	// â”€â”€ Input structs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 	type listItem struct {
 		Title       string `json:"title"`
 		Description string `json:"desc"`
-		// ID fallback chain: RowId → RowID → rowId → rowID → title
+		// ID fallback chain: RowId â†’ RowID â†’ rowId â†’ rowID â†’ title
 		RowId  string `json:"RowId"`
 		RowID  string `json:"RowID"`
 		Rowid  string `json:"rowId"`
@@ -2667,7 +2624,7 @@ func (s *server) SendList() http.HandlerFunc {
 		QuotedMessage *waE2E.Message    `json:"QuotedMessage,omitempty"`
 	}
 
-	// ── Handler ──────────────────────────────────────────────────────────────
+	// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -2677,7 +2634,7 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		// ── 1. Decode ────────────────────────────────────────────────────────
+		// â”€â”€ 1. Decode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		var req listRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2697,7 +2654,7 @@ func (s *server) SendList() http.HandlerFunc {
 			body = strings.TrimSpace(req.Text)
 		}
 
-		// ── 2. Validation ────────────────────────────────────────────────────
+		// â”€â”€ 2. Validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		if req.Phone == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
@@ -2712,7 +2669,7 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		// ── 3. Build proto sections ──────────────────────────────────────────
+		// â”€â”€ 3. Build proto sections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		// resolveRowID picks the first non-empty value from the ID fallback chain.
 		resolveRowID := func(item listItem) string {
@@ -2796,7 +2753,7 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		// ── 4. Validate recipient ────────────────────────────────────────────
+		// â”€â”€ 4. Validate recipient â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		recipient, err := validateMessageFields(req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
 		if err != nil {
@@ -2809,7 +2766,7 @@ func (s *server) SendList() http.HandlerFunc {
 			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
 		}
 
-		// ── 5. Build ListMessage protobuf ────────────────────────────────────
+		// â”€â”€ 5. Build ListMessage protobuf â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		buttonText := strings.TrimSpace(req.ButtonText)
 		if buttonText == "" {
@@ -2855,7 +2812,7 @@ func (s *server) SendList() http.HandlerFunc {
 			listMsg.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		// ── 6. Wrap in DocumentWithCaptionMessage > FutureProofMessage ───────
+		// â”€â”€ 6. Wrap in DocumentWithCaptionMessage > FutureProofMessage â”€â”€â”€â”€â”€â”€â”€
 		//
 		// WRONG (old):  ViewOnceMessage > FutureProofMessage > ListMessage
 		// CORRECT:      DocumentWithCaptionMessage > FutureProofMessage > ListMessage
@@ -2869,7 +2826,7 @@ func (s *server) SendList() http.HandlerFunc {
 			},
 		}
 
-		// ── 7. Extra binary nodes ────────────────────────────────────────────
+		// â”€â”€ 7. Extra binary nodes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 		//
 		// Lists require: biz > list(type="product_list", v="2")
 		// Without this node the WhatsApp server does not process the message
@@ -2886,7 +2843,7 @@ func (s *server) SendList() http.HandlerFunc {
 			}},
 		}}
 
-		// ── 8. Send ──────────────────────────────────────────────────────────
+		// â”€â”€ 8. Send â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(
 			context.Background(), recipient, finalMsg,
@@ -2901,13 +2858,13 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		// ── 9. History & events ──────────────────────────────────────────────
+		// â”€â”€ 9. History & events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
 		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "list", body, "", historyLimit)
 
-		// ── 10. Response ─────────────────────────────────────────────────────
+		// â”€â”€ 10. Response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 		responseJSON, _ := json.Marshal(map[string]interface{}{
 			"Details":   "Sent",
@@ -3053,7 +3010,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 
 		msg.ExtendedTextMessage.ContextInfo = buildContextInfo(t.ContextInfo, qm)
 
-		// OTIMIZAÇÃO: Use context com timeout maior para grupos
+		// OTIMIZAÃ‡ÃƒO: Use context com timeout maior para grupos
 		ctx := context.Background()
 		if recipient.Server == types.GroupServer {
 			var cancel context.CancelFunc
@@ -3599,11 +3556,11 @@ func (s *server) CheckUser() http.HandlerFunc {
 	type User struct {
 		Query        string
 		IsInWhatsapp bool
-		JID          string // JID de telefone (user@s.whatsapp.net), quando resolvível
+		JID          string // JID de telefone (user@s.whatsapp.net), quando resolvÃ­vel
 		LID          string // Linked ID (user@lid), quando o WhatsApp retornar/mapear um
-		VerifiedName string // nome do certificado de negócio verificado (raro)
-		PushName     string // nome de exibição do contato (só se já houve troca de mensagem)
-		BusinessName string // nome de negócio salvo localmente (idem, cache de contato)
+		VerifiedName string // nome do certificado de negÃ³cio verificado (raro)
+		PushName     string // nome de exibiÃ§Ã£o do contato (sÃ³ se jÃ¡ houve troca de mensagem)
+		BusinessName string // nome de negÃ³cio salvo localmente (idem, cache de contato)
 	}
 
 	type UserCollection struct {
@@ -3640,9 +3597,9 @@ func (s *server) CheckUser() http.HandlerFunc {
 			return
 		}
 
-		// IsOnWhatsApp não pede a tag "lid" no usync, então o Store.LIDs pode não
+		// IsOnWhatsApp nÃ£o pede a tag "lid" no usync, entÃ£o o Store.LIDs pode nÃ£o
 		// ter o par PN<->LID ainda. Para os que vieram como PN puro, chamamos
-		// GetUserInfo (que pede "lid") em lote, só para popular o mapeamento local.
+		// GetUserInfo (que pede "lid") em lote, sÃ³ para popular o mapeamento local.
 		var pnToResolve []types.JID
 		for _, item := range resp {
 			if item.IsIn && item.JID.Server == types.DefaultUserServer {
@@ -3686,7 +3643,7 @@ func (s *server) CheckUser() http.HandlerFunc {
 				VerifiedName: verifiedName,
 			}
 
-			// PushName/BusinessName só existem no cache local se já houve troca de
+			// PushName/BusinessName sÃ³ existem no cache local se jÃ¡ houve troca de
 			// mensagem com esse contato (recebida via message.go / history sync).
 			if item.IsIn && !pnJID.IsEmpty() {
 				if contact, err := client.Store.Contacts.GetContact(ctx, pnJID); err == nil && contact.Found {
@@ -5342,47 +5299,13 @@ func (s *server) ListUsers() http.HandlerFunc {
 				"proxy_url":  user.ProxyURL.String,
 				"events":     user.Events,
 			}
-			// Add proxy_config
-			proxyURL := user.ProxyURL.String
-			userMap["proxy_config"] = map[string]interface{}{
-				"enabled":   proxyURL != "",
-				"proxy_url": proxyURL,
-			}
-			// Add s3_config (search S3 fields in the database)
-			var s3Enabled bool
-			var s3Endpoint, s3Region, s3Bucket, s3PublicURL, s3MediaDelivery string
-			var s3PathStyle bool
-			var s3RetentionDays int
-			// Start with safe defaults so the field is always present in the response
-			s3Config := map[string]interface{}{
-				"enabled":        false,
-				"endpoint":       "",
-				"region":         "",
-				"bucket":         "",
-				"access_key":     "***",
-				"path_style":     false,
-				"public_url":     "",
-				"media_delivery": "",
-				"retention_days": 0,
-			}
-			err = s.db.QueryRow(`SELECT COALESCE(s3_enabled, false), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''), COALESCE(s3_bucket, ''), COALESCE(s3_path_style, false), COALESCE(s3_public_url, ''), COALESCE(media_delivery, ''), COALESCE(s3_retention_days, 0) FROM users WHERE id = $1`, user.Id).Scan(&s3Enabled, &s3Endpoint, &s3Region, &s3Bucket, &s3PathStyle, &s3PublicURL, &s3MediaDelivery, &s3RetentionDays)
-			if err == nil {
-				// Overwrite defaults with actual values if the query succeeded
-				s3Config["enabled"] = s3Enabled
-				s3Config["endpoint"] = s3Endpoint
-				s3Config["region"] = s3Region
-				s3Config["bucket"] = s3Bucket
-				s3Config["path_style"] = s3PathStyle
-				s3Config["public_url"] = s3PublicURL
-				s3Config["media_delivery"] = s3MediaDelivery
-				s3Config["retention_days"] = s3RetentionDays
-			} else {
-				if err != sql.ErrNoRows {
-					log.Warn().Err(err).Str("user_id", user.Id).Msg("Failed to query S3 config for user")
-				}
-			}
-			userMap["s3_config"] = s3Config
-			users = append(users, userMap)
+		// Add proxy_config
+		proxyURL := user.ProxyURL.String
+		userMap["proxy_config"] = map[string]interface{}{
+			"enabled":   proxyURL != "",
+			"proxy_url": proxyURL,
+		}
+		users = append(users, userMap)
 		}
 		// Check for any error that occurred during iteration
 		if err := rows.Err(); err != nil {
@@ -5420,7 +5343,6 @@ func (s *server) AddUser() http.HandlerFunc {
 			Expiration  int          `json:"expiration,omitempty"`
 			Events      string       `json:"events,omitempty"`
 			ProxyConfig *ProxyConfig `json:"proxyConfig,omitempty"`
-			S3Config    *S3Config    `json:"s3Config,omitempty"`
 			History     int          `json:"history,omitempty"`
 		}
 
@@ -5434,7 +5356,7 @@ func (s *server) AddUser() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Interface("proxyConfig", user.ProxyConfig).Interface("s3Config", user.S3Config).Msg("Received values for proxyConfig and s3Config")
+		log.Info().Interface("proxyConfig", user.ProxyConfig).Msg("Received values for proxyConfig")
 		log.Debug().Interface("user", user).Msg("Received values for user")
 
 		// Set defaults only if nil
@@ -5443,9 +5365,6 @@ func (s *server) AddUser() http.HandlerFunc {
 		}
 		if user.ProxyConfig == nil {
 			user.ProxyConfig = &ProxyConfig{}
-		}
-		if user.S3Config == nil {
-			user.S3Config = &S3Config{}
 		}
 		if user.Webhook == "" {
 			user.Webhook = ""
@@ -5500,11 +5419,10 @@ func (s *server) AddUser() http.HandlerFunc {
 			return
 		}
 
-		// Insert user with all proxy and S3 fields
+		// Insert user with proxy field
 		if _, err = s.db.Exec(
-			"INSERT INTO users (id, name, token, webhook, expiration, events, jid, qrcode, proxy_url, s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key, s3_secret_key, s3_path_style, s3_public_url, media_delivery, s3_retention_days, history) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
-			id, user.Name, user.Token, user.Webhook, user.Expiration, user.Events, "", "", user.ProxyConfig.ProxyURL,
-			user.S3Config.Enabled, user.S3Config.Endpoint, user.S3Config.Region, user.S3Config.Bucket, user.S3Config.AccessKey, user.S3Config.SecretKey, user.S3Config.PathStyle, user.S3Config.PublicURL, user.S3Config.MediaDelivery, user.S3Config.RetentionDays, user.History,
+			"INSERT INTO users (id, name, token, webhook, expiration, events, jid, qrcode, proxy_url, history) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+			id, user.Name, user.Token, user.Webhook, user.Expiration, user.Events, "", "", user.ProxyConfig.ProxyURL, user.History,
 		); err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("admin DB error")
 			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -5515,38 +5433,10 @@ func (s *server) AddUser() http.HandlerFunc {
 			return
 		}
 
-		// Initialize S3Manager if necessary
-		if user.S3Config != nil && user.S3Config.Enabled {
-			s3Config := &S3Config{
-				Enabled:       user.S3Config.Enabled,
-				Endpoint:      user.S3Config.Endpoint,
-				Region:        user.S3Config.Region,
-				Bucket:        user.S3Config.Bucket,
-				AccessKey:     user.S3Config.AccessKey,
-				SecretKey:     user.S3Config.SecretKey,
-				PathStyle:     user.S3Config.PathStyle,
-				PublicURL:     user.S3Config.PublicURL,
-				MediaDelivery: user.S3Config.MediaDelivery,
-				RetentionDays: user.S3Config.RetentionDays,
-			}
-			_ = GetS3Manager().InitializeS3Client(id, s3Config)
-		}
-
 		// Build response like GET /admin/users
 		proxyConfig := map[string]interface{}{
 			"enabled":   user.ProxyConfig.Enabled,
 			"proxy_url": user.ProxyConfig.ProxyURL,
-		}
-		s3Config := map[string]interface{}{
-			"enabled":        user.S3Config.Enabled,
-			"endpoint":       user.S3Config.Endpoint,
-			"region":         user.S3Config.Region,
-			"bucket":         user.S3Config.Bucket,
-			"access_key":     "***",
-			"path_style":     user.S3Config.PathStyle,
-			"public_url":     user.S3Config.PublicURL,
-			"media_delivery": user.S3Config.MediaDelivery,
-			"retention_days": user.S3Config.RetentionDays,
 		}
 		userMap := map[string]interface{}{
 			"id":           id,
@@ -5556,7 +5446,6 @@ func (s *server) AddUser() http.HandlerFunc {
 			"expiration":   user.Expiration,
 			"events":       user.Events,
 			"proxy_config": proxyConfig,
-			"s3_config":    s3Config,
 		}
 		s.respondWithJSON(w, http.StatusCreated, map[string]interface{}{
 			"code":    http.StatusCreated,
@@ -5588,7 +5477,6 @@ func (s *server) EditUser() http.HandlerFunc {
 			Expiration  int          `json:"expiration,omitempty"`
 			Events      string       `json:"events,omitempty"`
 			ProxyConfig *ProxyConfig `json:"proxyConfig,omitempty"`
-			S3Config    *S3Config    `json:"s3Config,omitempty"`
 			History     int          `json:"history,omitempty"`
 		}
 
@@ -5602,7 +5490,7 @@ func (s *server) EditUser() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Interface("proxyConfig", user.ProxyConfig).Interface("s3Config", user.S3Config).Msg("Received values for proxyConfig and s3Config")
+		log.Info().Interface("proxyConfig", user.ProxyConfig).Msg("Received values for proxyConfig")
 		log.Debug().Interface("user", user).Msg("Received values for user")
 
 		// Check if user exists
@@ -5678,20 +5566,6 @@ func (s *server) EditUser() http.HandlerFunc {
 			}
 		}
 
-		// Handle S3 config
-		if user.S3Config != nil {
-			addField("s3_enabled", user.S3Config.Enabled, true)
-			addField("s3_endpoint", user.S3Config.Endpoint, true)
-			addField("s3_region", user.S3Config.Region, true)
-			addField("s3_bucket", user.S3Config.Bucket, true)
-			addField("s3_access_key", user.S3Config.AccessKey, true)
-			addField("s3_secret_key", user.S3Config.SecretKey, true)
-			addField("s3_path_style", user.S3Config.PathStyle, true)
-			addField("s3_public_url", user.S3Config.PublicURL, true)
-			addField("media_delivery", user.S3Config.MediaDelivery, true)
-			addField("s3_retention_days", user.S3Config.RetentionDays, true)
-		}
-
 		// If no fields to update, return early
 		if argIndex == 1 {
 			s.respondWithJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -5715,28 +5589,6 @@ func (s *server) EditUser() http.HandlerFunc {
 				"success": false,
 			})
 			return
-		}
-
-		// Update S3Manager if S3 config was modified
-		if user.S3Config != nil {
-			if user.S3Config.Enabled {
-				s3Config := &S3Config{
-					Enabled:       user.S3Config.Enabled,
-					Endpoint:      user.S3Config.Endpoint,
-					Region:        user.S3Config.Region,
-					Bucket:        user.S3Config.Bucket,
-					AccessKey:     user.S3Config.AccessKey,
-					SecretKey:     user.S3Config.SecretKey,
-					PathStyle:     user.S3Config.PathStyle,
-					PublicURL:     user.S3Config.PublicURL,
-					MediaDelivery: user.S3Config.MediaDelivery,
-					RetentionDays: user.S3Config.RetentionDays,
-				}
-				_ = GetS3Manager().InitializeS3Client(userID, s3Config)
-			} else {
-				// Remove S3 client if disabled
-				GetS3Manager().RemoveClient(userID)
-			}
 		}
 
 		// Update userinfo cache for any modified fields
@@ -5924,20 +5776,6 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			err = os.RemoveAll(userDirectory)
 			if err != nil {
 				log.Error().Err(err).Str("dir", userDirectory).Msg("error removing media directory")
-			}
-		}
-
-		// 5. Remove files from S3 (if enabled)
-		var s3Enabled bool
-		err = s.db.QueryRow("SELECT s3_enabled FROM users WHERE id = $1", id).Scan(&s3Enabled)
-		if err == nil && s3Enabled {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			errS3 := GetS3Manager().DeleteAllUserObjects(ctx, id)
-			if errS3 != nil {
-				log.Error().Err(errS3).Str("id", id).Msg("error removing user files from S3")
-			} else {
-				log.Info().Str("id", id).Msg("user files from S3 removed successfully")
 			}
 		}
 
@@ -6160,296 +5998,6 @@ func (s *server) SetProxy() http.HandlerFunc {
 			"Details":  "Proxy configured successfully",
 			"ProxyURL": t.ProxyURL,
 		}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-	}
-}
-
-// Configure S3
-func (s *server) ConfigureS3() http.HandlerFunc {
-	type s3ConfigStruct struct {
-		Enabled       bool   `json:"enabled"`
-		Endpoint      string `json:"endpoint"`
-		Region        string `json:"region"`
-		Bucket        string `json:"bucket"`
-		AccessKey     string `json:"access_key"`
-		SecretKey     string `json:"secret_key"`
-		PathStyle     bool   `json:"path_style"`
-		PublicURL     string `json:"public_url"`
-		MediaDelivery string `json:"media_delivery"`
-		RetentionDays int    `json:"retention_days"`
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		decoder := json.NewDecoder(r.Body)
-		var t s3ConfigStruct
-		err := decoder.Decode(&t)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode payload"))
-			return
-		}
-
-		// Validate media_delivery
-		if t.MediaDelivery != "" && t.MediaDelivery != "base64" && t.MediaDelivery != "s3" && t.MediaDelivery != "both" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("media_delivery must be 'base64', 's3', or 'both'"))
-			return
-		}
-
-		if t.MediaDelivery == "" {
-			t.MediaDelivery = "base64"
-		}
-
-		// Update database
-		_, err = s.db.Exec(`
-			UPDATE users SET 
-				s3_enabled = $1,
-				s3_endpoint = $2,
-				s3_region = $3,
-				s3_bucket = $4,
-				s3_access_key = $5,
-				s3_secret_key = $6,
-				s3_path_style = $7,
-				s3_public_url = $8,
-				media_delivery = $9,
-				s3_retention_days = $10
-			WHERE id = $11`,
-			t.Enabled, t.Endpoint, t.Region, t.Bucket, t.AccessKey, t.SecretKey,
-			t.PathStyle, t.PublicURL, t.MediaDelivery, t.RetentionDays, txtid)
-
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to save S3 configuration"))
-			return
-		}
-
-		// Initialize S3 client if enabled
-		if t.Enabled {
-			s3Config := &S3Config{
-				Enabled:       t.Enabled,
-				Endpoint:      t.Endpoint,
-				Region:        t.Region,
-				Bucket:        t.Bucket,
-				AccessKey:     t.AccessKey,
-				SecretKey:     t.SecretKey,
-				PathStyle:     t.PathStyle,
-				PublicURL:     t.PublicURL,
-				RetentionDays: t.RetentionDays,
-			}
-
-			err = GetS3Manager().InitializeS3Client(txtid, s3Config)
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to initialize S3 client: %v", err)))
-				return
-			}
-		} else {
-			GetS3Manager().RemoveClient(txtid)
-		}
-
-		// Update userinfocache with S3 configuration
-		token := r.Context().Value("userinfo").(Values).Get("Token")
-		if cachedUserInfo, found := userinfocache.Get(token); found {
-			updatedUserInfo := cachedUserInfo.(Values)
-
-			// Update S3-related fields in cache
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3Enabled", strconv.FormatBool(t.Enabled)).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3Endpoint", t.Endpoint).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3Region", t.Region).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3Bucket", t.Bucket).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3AccessKey", t.AccessKey).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3SecretKey", t.SecretKey).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3PathStyle", strconv.FormatBool(t.PathStyle)).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3PublicURL", t.PublicURL).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "MediaDelivery", t.MediaDelivery).(Values)
-			updatedUserInfo = updateUserInfo(updatedUserInfo, "S3RetentionDays", strconv.Itoa(t.RetentionDays)).(Values)
-
-			userinfocache.Set(token, updatedUserInfo, cache.NoExpiration)
-			log.Info().Str("userID", txtid).Msg("User info cache updated with S3 configuration")
-		}
-
-		response := map[string]interface{}{
-			"Details": "S3 configuration saved successfully",
-			"Enabled": t.Enabled,
-		}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-	}
-}
-
-// Get S3 Configuration
-func (s *server) GetS3Config() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		var config struct {
-			Enabled       bool   `json:"enabled" db:"enabled"`
-			Endpoint      string `json:"endpoint" db:"endpoint"`
-			Region        string `json:"region" db:"region"`
-			Bucket        string `json:"bucket" db:"bucket"`
-			AccessKey     string `json:"access_key" db:"access_key"`
-			PathStyle     bool   `json:"path_style" db:"path_style"`
-			PublicURL     string `json:"public_url" db:"public_url"`
-			MediaDelivery string `json:"media_delivery" db:"media_delivery"`
-			RetentionDays int    `json:"retention_days" db:"retention_days"`
-		}
-
-		err := s.db.Get(&config, `
-			SELECT 
-				s3_enabled as enabled,
-				s3_endpoint as endpoint,
-				s3_region as region,
-				s3_bucket as bucket,
-				s3_access_key as access_key,
-				s3_path_style as path_style,
-				s3_public_url as public_url,
-				media_delivery,
-				s3_retention_days as retention_days
-			FROM users WHERE id = $1`, txtid)
-
-		if err != nil {
-			log.Error().Err(err).Str("userID", txtid).Msg("Failed to get S3 configuration from database")
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to get S3 configuration"))
-			return
-		}
-
-		log.Debug().Str("userID", txtid).Bool("enabled", config.Enabled).Str("endpoint", config.Endpoint).Str("bucket", config.Bucket).Msg("Retrieved S3 configuration from database")
-
-		// Don't return secret key for security
-		config.AccessKey = "***" // Mask access key
-
-		responseJson, err := json.Marshal(config)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-	}
-}
-
-// Test S3 Connection
-func (s *server) TestS3Connection() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		// Get S3 config from database
-		var config struct {
-			Enabled       bool   `db:"enabled"`
-			Endpoint      string `db:"endpoint"`
-			Region        string `db:"region"`
-			Bucket        string `db:"bucket"`
-			AccessKey     string `db:"access_key"`
-			SecretKey     string `db:"secret_key"`
-			PathStyle     bool   `db:"path_style"`
-			PublicURL     string `db:"public_url"`
-			RetentionDays int    `db:"retention_days"`
-		}
-
-		err := s.db.Get(&config, `
-			SELECT 
-				s3_enabled as enabled,
-				s3_endpoint as endpoint,
-				s3_region as region,
-				s3_bucket as bucket,
-				s3_access_key as access_key,
-				s3_secret_key as secret_key,
-				s3_path_style as path_style,
-				s3_public_url as public_url,
-				s3_retention_days as retention_days
-			FROM users WHERE id = $1`, txtid)
-
-		if err != nil {
-			log.Error().Err(err).Str("userID", txtid).Msg("Failed to get S3 configuration from database for test connection")
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to get S3 configuration"))
-			return
-		}
-
-		log.Debug().Str("userID", txtid).Bool("enabled", config.Enabled).Str("endpoint", config.Endpoint).Str("bucket", config.Bucket).Msg("Retrieved S3 configuration from database for test connection")
-
-		if !config.Enabled {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("S3 is not enabled for this user"))
-			return
-		}
-
-		// Initialize S3 client
-		s3Config := &S3Config{
-			Enabled:       config.Enabled,
-			Endpoint:      config.Endpoint,
-			Region:        config.Region,
-			Bucket:        config.Bucket,
-			AccessKey:     config.AccessKey,
-			SecretKey:     config.SecretKey,
-			PathStyle:     config.PathStyle,
-			PublicURL:     config.PublicURL,
-			RetentionDays: config.RetentionDays,
-		}
-
-		err = GetS3Manager().InitializeS3Client(txtid, s3Config)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to initialize S3 client: %v", err)))
-			return
-		}
-
-		// Test connection
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		err = GetS3Manager().TestConnection(ctx, txtid)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("S3 connection test failed: %v", err)))
-			return
-		}
-
-		response := map[string]interface{}{
-			"Details": "S3 connection test successful",
-			"Bucket":  config.Bucket,
-			"Region":  config.Region,
-		}
-		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-	}
-}
-
-// Delete S3 Configuration
-func (s *server) DeleteS3Config() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-
-		// Update database to remove S3 configuration
-		_, err := s.db.Exec(`
-			UPDATE users SET 
-				s3_enabled = false,
-				s3_endpoint = '',
-				s3_region = '',
-				s3_bucket = '',
-				s3_access_key = '',
-				s3_secret_key = '',
-				s3_path_style = true,
-				s3_public_url = '',
-				media_delivery = 'base64',
-				s3_retention_days = 30
-			WHERE id = $1`, txtid)
-
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to delete S3 configuration"))
-			return
-		}
-
-		// Remove S3 client
-		GetS3Manager().RemoveClient(txtid)
-
-		response := map[string]interface{}{"Details": "S3 configuration deleted successfully"}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -6978,7 +6526,7 @@ func (s *server) RequestUnavailableMessage() http.HandlerFunc {
 		}
 
 		// Send the request with Peer: true as required by the documentation
-		// (caminho único compartilhado com o auto-retry; timeout de 30s preservado).
+		// (caminho Ãºnico compartilhado com o auto-retry; timeout de 30s preservado).
 		resp, err := sendUnavailableMessageRequest(client, chatJID, senderJID, t.ID, 30*time.Second)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to send unavailable message request: %s", err)))
@@ -7130,7 +6678,7 @@ func (s *server) GetWhatsAppStatus() http.HandlerFunc {
 			"reachable":             true,
 			"can_send_new_messages": true,
 			"message":               "No WhatsApp restriction for starting new conversations was detected for the currently connected account.",
-			"message_ptbr":          "Nenhuma restrição de envio de novas conversas foi identificada no WhatsApp para a conta atualmente conectada.",
+			"message_ptbr":          "Nenhuma restriÃ§Ã£o de envio de novas conversas foi identificada no WhatsApp para a conta atualmente conectada.",
 		}
 
 		// -----------------------------
@@ -7177,15 +6725,15 @@ func (s *server) GetWhatsAppStatus() http.HandlerFunc {
 				reachout["enforcement_type"] = string(timelockInfo.EnforcementType)
 				reachout["until"] = parseTime(timelockInfo.TimeEnforcementEnds)
 
-				// 🔥 prioridade maior que capping
+				// ðŸ”¥ prioridade maior que capping
 				response["can_send_new_messages"] = false
 				response["error_key"] = "WHATSAPP_REACHOUT_TIMELOCK"
 
 				response["message"] = "WhatsApp indicates that the currently connected account is under a temporary restriction for starting new conversations. This is not an internal API error."
-				response["message_ptbr"] = "O WhatsApp indica que a conta atualmente conectada está sob uma restrição temporária para iniciar novas conversas. Isso não é um erro interno da API."
+				response["message_ptbr"] = "O WhatsApp indica que a conta atualmente conectada estÃ¡ sob uma restriÃ§Ã£o temporÃ¡ria para iniciar novas conversas. Isso nÃ£o Ã© um erro interno da API."
 
 				response["provider_message"] = "WhatsApp reported that the currently connected account is under a temporary restriction for starting new conversations, usually related to sending volume or quality."
-				response["provider_message_ptbr"] = "O WhatsApp informou que a conta atualmente conectada está sob uma restrição temporária para iniciar novas conversas, normalmente relacionada a volume ou qualidade de envios."
+				response["provider_message_ptbr"] = "O WhatsApp informou que a conta atualmente conectada estÃ¡ sob uma restriÃ§Ã£o temporÃ¡ria para iniciar novas conversas, normalmente relacionada a volume ou qualidade de envios."
 			}
 		}
 
@@ -7207,10 +6755,10 @@ func (s *server) GetWhatsAppStatus() http.HandlerFunc {
 // AddContact salva um contato na agenda do WhatsApp via app state sync.
 //
 // MutationInfo tem apenas Index, Version e Value (*waSyncAction.SyncActionValue)
-// — sem campo Operation. O SET é o default do patch.
+// â€” sem campo Operation. O SET Ã© o default do patch.
 //
 // POST /contact/add
-// Body: { "phone": "5511999990001", "name": "João Silva", "first_name": "João" }
+// Body: { "phone": "5511999990001", "name": "JoÃ£o Silva", "first_name": "JoÃ£o" }
 func (s *server) AddContact() http.HandlerFunc {
 
 	type addContactRequest struct {
@@ -7244,7 +6792,7 @@ func (s *server) AddContact() http.HandlerFunc {
 			return
 		}
 
-		// normaliza número → JID
+		// normaliza nÃºmero â†’ JID
 		phone := strings.TrimPrefix(t.Phone, "+")
 		phone = strings.ReplaceAll(phone, " ", "")
 		phone = strings.ReplaceAll(phone, "-", "")

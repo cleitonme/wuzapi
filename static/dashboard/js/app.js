@@ -243,10 +243,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Initialize S3 media delivery dropdown
-  $('#s3MediaDelivery').dropdown();
-  $('#addInstanceS3MediaDelivery').dropdown();
-
   // Initialize proxy enabled checkbox with onChange handler
   $('#proxyEnabledToggle').checkbox({
     onChange: function() {
@@ -268,28 +264,6 @@ document.addEventListener('DOMContentLoaded', function() {
       } else {
         $('#addInstanceProxyUrlField').hide();
         $('input[name="proxy_url"]').val('');
-      }
-    }
-  });
-
-  // Initialize add instance S3 toggle
-  $('#addInstanceS3Toggle').checkbox({
-    onChange: function() {
-      const enabled = $('input[name="s3_enabled"]').is(':checked');
-      if (enabled) {
-        $('#addInstanceS3Fields').show();
-      } else {
-        $('#addInstanceS3Fields').hide();
-        // Clear S3 fields when disabled
-        $('input[name="s3_endpoint"]').val('');
-        $('input[name="s3_access_key"]').val('');
-        $('input[name="s3_secret_key"]').val('');
-        $('input[name="s3_bucket"]').val('');
-        $('input[name="s3_region"]').val('');
-        $('input[name="s3_public_url"]').val('');
-        $('input[name="s3_retention_days"]').val('30');
-        $('input[name="s3_path_style"]').prop('checked', false);
-        $('#addInstanceS3MediaDelivery').dropdown('set selected', 'base64');
       }
     }
   });
@@ -456,17 +430,6 @@ document.addEventListener('DOMContentLoaded', function() {
     getContacts();
   });
 
-  // S3 Configuration
-  document.getElementById('s3Config').addEventListener('click', function() {
-    $('#modalS3Config').modal({
-      onApprove: function() {
-        saveS3Config();
-        return false;
-      }
-    }).modal('show');
-    loadS3Config();
-  });
-
   // History Configuration
   document.getElementById('historyConfig').addEventListener('click', function() {
     $('#modalHistoryConfig').modal({
@@ -492,16 +455,6 @@ document.addEventListener('DOMContentLoaded', function() {
   // Webhook Configuration
   document.getElementById('webhookConfig').addEventListener('click', function() {
     webhookModal();
-  });
-
-  // S3 Test Connection
-  document.getElementById('testS3Connection').addEventListener('click', function() {
-    testS3Connection();
-  });
-
-  // S3 Delete Configuration
-  document.getElementById('deleteS3Config').addEventListener('click', function() {
-    deleteS3Config();
   });
 
   // Proxy checkbox toggle is now initialized in DOMContentLoaded
@@ -553,22 +506,6 @@ document.addEventListener('DOMContentLoaded', function() {
           type: 'regExp[^(https?|socks5)://.*]',
           prompt: 'Proxy URL must start with http://, https://, or socks5://'
         }]
-      },
-      s3_endpoint: {
-        identifier: 's3_endpoint',
-        optional: true,
-        rules: [{
-          type: 'url',
-          prompt: 'Please enter a valid S3 endpoint URL'
-        }]
-      },
-      s3_bucket: {
-        identifier: 's3_bucket',
-        optional: true,
-        rules: [{
-          type: 'regExp[^[a-z0-9][a-z0-9.-]*[a-z0-9]$]',
-          prompt: 'Please enter a valid S3 bucket name'
-        }]
       }
     },
     onSuccess: function(event, fields) {
@@ -576,26 +513,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Validate conditional fields
       const proxyEnabled = fields.proxy_enabled === 'on' || fields.proxy_enabled === true;
-      const s3Enabled = fields.s3_enabled === 'on' || fields.s3_enabled === true;
 
       if (proxyEnabled && !fields.proxy_url) {
         showError('Proxy URL is required when proxy is enabled');
         return false;
-      }
-
-      if (s3Enabled) {
-        if (!fields.s3_bucket) {
-          showError('S3 bucket name is required when S3 is enabled');
-          return false;
-        }
-        if (!fields.s3_access_key) {
-          showError('S3 access key is required when S3 is enabled');
-          return false;
-        }
-        if (!fields.s3_secret_key) {
-          showError('S3 secret key is required when S3 is enabled');
-          return false;
-        }
       }
 
       addInstance(fields).then((result) => {
@@ -615,9 +536,7 @@ document.addEventListener('DOMContentLoaded', function() {
       $('.ui.dropdown').dropdown('restore defaults');
       // Reset toggles
       $('#addInstanceProxyToggle').checkbox('set unchecked');
-      $('#addInstanceS3Toggle').checkbox('set unchecked');
       $('#addInstanceProxyUrlField').hide();
-      $('#addInstanceS3Fields').hide();
     }
   });
 
@@ -638,22 +557,6 @@ async function addInstance(data) {
     proxyURL: proxyEnabled ? (data.proxy_url || '') : ''
   };
   
-  // Build S3 configuration
-  const s3Enabled = data.s3_enabled === 'on' || data.s3_enabled === true;
-  const s3PathStyle = data.s3_path_style === 'on' || data.s3_path_style === true;
-  const s3Config = {
-    enabled: s3Enabled,
-    endpoint: s3Enabled ? (data.s3_endpoint || '') : '',
-    region: s3Enabled ? (data.s3_region || '') : '',
-    bucket: s3Enabled ? (data.s3_bucket || '') : '',
-    accessKey: s3Enabled ? (data.s3_access_key || '') : '',
-    secretKey: s3Enabled ? (data.s3_secret_key || '') : '',
-    pathStyle: s3PathStyle,
-    publicURL: s3Enabled ? (data.s3_public_url || '') : '',
-    mediaDelivery: s3Enabled ? (data.s3_media_delivery || 'base64') : 'base64',
-    retentionDays: s3Enabled ? (parseInt(data.s3_retention_days) || 30) : 30
-  };
-
   const payload = {
     name: data.name,
     token: data.token,
@@ -661,8 +564,7 @@ async function addInstance(data) {
     webhook: data.webhook_url || '',
     expiration: 0,
     history: parseInt(data.history) || 0,
-    proxyConfig: proxyConfig,
-    s3Config: s3Config
+    proxyConfig: proxyConfig
   };
 
   console.log("Payload being sent:", payload);
@@ -1373,14 +1275,6 @@ function populateInstances(instances) {
                               <div class="header">Proxy URL</div>
                               <div class="content">${instance.proxy_config.proxy_url || 'Not configured'}</div>
                           </div>
-                          <div class="item">
-                              <div class="header">S3</div>
-                              <div class="content">${instance.s3_config.enabled ? 'Enabled' : 'Disabled'}</div>
-                          </div>
-                          <div class="item">
-                              <div class="header">S3 Endpoint</div>
-                              <div class="content">${instance.s3_config.endpoint || 'Not configured'}</div>
-                          </div>
                       </div>
                   </div>
                   
@@ -1508,211 +1402,6 @@ function showRegularUser() {
     <i class="user icon"></i>
     <div class="ui mini label">USER</div>
   `;
-}
-
-// S3 Configuration Functions
-async function loadS3Config() {
-  // Check if we have instance data available (admin viewing specific instance)
-  if (currentInstanceData && currentInstanceData.s3_config) {
-    const s3Config = currentInstanceData.s3_config;
-    const hasConfig = s3Config.enabled || s3Config.endpoint || s3Config.bucket;
-    
-    $('#s3Endpoint').val(s3Config.endpoint || '');
-    $('#s3AccessKey').val(s3Config.access_key === '***' ? '' : s3Config.access_key || '');
-    $('#s3SecretKey').val(''); // Never show secret key
-    $('#s3Bucket').val(s3Config.bucket || '');
-    $('#s3Region').val(s3Config.region || '');
-    $('#s3ForcePathStyle').prop('checked', s3Config.path_style || false);
-    $('#s3PublicUrl').val(s3Config.public_url || '');
-    
-    // Media delivery dropdown
-    $('#s3MediaDelivery').dropdown('set selected', s3Config.media_delivery || 'base64');
-    
-    // Retention days
-    $('#s3RetentionDays').val(s3Config.retention_days || 30);
-    
-    // Show/hide delete button based on whether config exists
-    if (hasConfig) {
-      $('#deleteS3Config').show();
-    } else {
-      $('#deleteS3Config').hide();
-    }
-    
-    return;
-  }
-  
-  // Fallback to API call for regular users or when instance data is not available
-  const token = getLocalStorageItem('token');
-  const myHeaders = new Headers();
-  myHeaders.append('token', token);
-  
-  try {
-    const res = await fetch(baseUrl + "/session/s3/config", {
-      method: "GET",
-      headers: myHeaders
-    });
-    
-    if (res.ok) {
-      const data = await res.json();
-      if (data.code === 200 && data.data) {
-        const hasConfig = data.data.enabled || data.data.endpoint || data.data.bucket;
-        
-        $('#s3Endpoint').val(data.data.endpoint || '');
-        $('#s3AccessKey').val(data.data.access_key === '***' ? '' : data.data.access_key);
-        $('#s3SecretKey').val(''); // Never show secret key
-        $('#s3Bucket').val(data.data.bucket || '');
-        $('#s3Region').val(data.data.region || '');
-        $('#s3ForcePathStyle').prop('checked', data.data.path_style || false);
-        $('#s3PublicUrl').val(data.data.public_url || '');
-        
-        // Media delivery dropdown
-        $('#s3MediaDelivery').dropdown('set selected', data.data.media_delivery || 'base64');
-        
-        // Retention days
-        $('#s3RetentionDays').val(data.data.retention_days || 30);
-        
-        // Show/hide delete button based on whether config exists
-        if (hasConfig) {
-          $('#deleteS3Config').show();
-        } else {
-          $('#deleteS3Config').hide();
-        }
-      } else {
-        // No config found, hide delete button and set defaults
-        $('#deleteS3Config').hide();
-        $('#s3Endpoint').val('');
-        $('#s3AccessKey').val('');
-        $('#s3SecretKey').val('');
-        $('#s3Bucket').val('');
-        $('#s3Region').val('');
-        $('#s3ForcePathStyle').prop('checked', false);
-        $('#s3PublicUrl').val('');
-        $('#s3MediaDelivery').dropdown('set selected', 'base64');
-        $('#s3RetentionDays').val(30);
-      }
-    }
-  } catch (error) {
-    console.error('Error loading S3 config:', error);
-    $('#deleteS3Config').hide();
-  }
-}
-
-async function saveS3Config() {
-  const token = getLocalStorageItem('token');
-  const myHeaders = new Headers();
-  myHeaders.append('token', token);
-  myHeaders.append('Content-Type', 'application/json');
-  
-  const config = {
-    enabled: true,
-    endpoint: $('#s3Endpoint').val().trim(),
-    access_key: $('#s3AccessKey').val().trim(),
-    secret_key: $('#s3SecretKey').val().trim(),
-    bucket: $('#s3Bucket').val().trim(),
-    region: $('#s3Region').val().trim(),
-    path_style: $('#s3ForcePathStyle').is(':checked'),
-    public_url: $('#s3PublicUrl').val().trim(),
-    media_delivery: $('#s3MediaDelivery').val() || 'base64',
-    retention_days: parseInt($('#s3RetentionDays').val()) || 30
-  };
-  
-  try {
-    const res = await fetch(baseUrl + "/session/s3/config", {
-      method: "POST",
-      headers: myHeaders,
-      body: JSON.stringify(config)
-    });
-    
-    const data = await res.json();
-    if (data.success) {
-      showSuccess('S3 configuration saved successfully');
-      // Show delete button since we now have a configuration
-      $('#deleteS3Config').show();
-      $('#modalS3Config').modal('hide');
-    } else {
-      showError('Failed to save S3 configuration: ' + (data.error || 'Unknown error'));
-    }
-  } catch (error) {
-    showError('Error saving S3 configuration');
-    console.error('Error:', error);
-  }
-}
-
-async function testS3Connection() {
-  const token = getLocalStorageItem('token');
-  const myHeaders = new Headers();
-  myHeaders.append('token', token);
-  
-  // Show loading state
-  $('#testS3Connection').addClass('loading disabled');
-  
-  try {
-    const res = await fetch(baseUrl + "/session/s3/test", {
-      method: "POST",
-      headers: myHeaders
-    });
-    
-    const data = await res.json();
-    if (data.success) {
-      showSuccess('S3 connection test successful!');
-    } else {
-      showError('S3 connection test failed: ' + (data.error || 'Unknown error'));
-    }
-  } catch (error) {
-    showError('Error testing S3 connection');
-    console.error('Error:', error);
-  } finally {
-    $('#testS3Connection').removeClass('loading disabled');
-  }
-}
-
-async function deleteS3Config() {
-  // Show confirmation dialog
-  if (!confirm('Are you sure you want to delete the S3 configuration? This action cannot be undone.')) {
-    return;
-  }
-  
-  const token = getLocalStorageItem('token');
-  const myHeaders = new Headers();
-  myHeaders.append('token', token);
-  
-  // Show loading state
-  $('#deleteS3Config').addClass('loading disabled');
-  
-  try {
-    const res = await fetch(baseUrl + "/session/s3/config", {
-      method: "DELETE",
-      headers: myHeaders
-    });
-    
-    const data = await res.json();
-    if (data.success) {
-      showSuccess('S3 configuration deleted successfully');
-      
-      // Clear all form fields
-      $('#s3Endpoint').val('');
-      $('#s3AccessKey').val('');
-      $('#s3SecretKey').val('');
-      $('#s3Bucket').val('');
-      $('#s3Region').val('');
-      $('#s3ForcePathStyle').prop('checked', false);
-      $('#s3PublicUrl').val('');
-      $('#s3MediaDelivery').dropdown('set selected', 'base64');
-      $('#s3RetentionDays').val(30);
-      
-      // Hide delete button
-      $('#deleteS3Config').hide();
-      
-      $('#modalS3Config').modal('hide');
-    } else {
-      showError('Failed to delete S3 configuration: ' + (data.error || 'Unknown error'));
-    }
-  } catch (error) {
-    showError('Error deleting S3 configuration');
-    console.error('Error:', error);
-  } finally {
-    $('#deleteS3Config').removeClass('loading disabled');
-  }
 }
 
 // History Configuration Functions

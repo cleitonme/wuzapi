@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -207,11 +206,8 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 	}
 
 	// Sinks globais sempre recebem.
-	// (No modo stdio não há webhook HTTP/Rabbit: só notificação abaixo.)
-	if mycli.s == nil || mycli.s.mode != Stdio {
-		go sendToGlobalWebHook(jsonData, mycli.token, mycli.userID)
-		go sendToGlobalRabbit(jsonData, mycli.token, mycli.userID)
-	}
+	go sendToGlobalWebHook(jsonData, mycli.token, mycli.userID)
+	go sendToGlobalRabbit(jsonData, mycli.token, mycli.userID)
 
 	// Get updated events from cache/database
 	subscribedEvents, err := updateAndGetUserSubscriptions(mycli)
@@ -229,12 +225,6 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 	// Check if the current event is in the subscriptions
 	checkIfSubscribedInEvent := checkIfSubscribedToEvent(subscribedEvents, eventType, mycli.userID)
 	if !checkIfSubscribedInEvent {
-		return
-	}
-
-	// In stdio mode, send as JSON-RPC notification instead of HTTP webhook
-	if mycli.s != nil && mycli.s.mode == Stdio {
-		mycli.s.SendNotification(eventType, postmap)
 		return
 	}
 
@@ -257,7 +247,7 @@ func checkIfSubscribedToEvent(subscribedEvents []string, eventType string, userI
 
 // Connects to Whatsapp Websocket on server startup if last state was connected
 func (s *server) connectOnStartup() {
-	rows, err := s.db.Queryx("SELECT id,name,token,jid,webhook,events,proxy_url,CASE WHEN s3_enabled THEN 'true' ELSE 'false' END AS s3_enabled,media_delivery,COALESCE(history, 0) as history FROM users WHERE connected=1")
+	rows, err := s.db.Queryx("SELECT id,name,token,jid,webhook,events,proxy_url,COALESCE(history, 0) as history FROM users WHERE connected=1")
 	if err != nil {
 		log.Error().Err(err).Msg("DB Problem")
 		return
@@ -271,26 +261,22 @@ func (s *server) connectOnStartup() {
 		webhook := ""
 		events := ""
 		proxy_url := ""
-		s3_enabled := ""
-		media_delivery := ""
 		var history int
-		err = rows.Scan(&txtid, &name, &token, &jid, &webhook, &events, &proxy_url, &s3_enabled, &media_delivery, &history)
+		err = rows.Scan(&txtid, &name, &token, &jid, &webhook, &events, &proxy_url, &history)
 		if err != nil {
 			log.Error().Err(err).Msg("DB Problem")
 			return
 		} else {
 			log.Info().Str("token", token).Msg("Connect to Whatsapp on startup")
 			v := Values{map[string]string{
-				"Id":            txtid,
-				"Name":          name,
-				"Jid":           jid,
-				"Webhook":       webhook,
-				"Token":         token,
-				"Proxy":         proxy_url,
-				"Events":        events,
-				"S3Enabled":     s3_enabled,
-				"MediaDelivery": media_delivery,
-				"History":       fmt.Sprintf("%d", history),
+				"Id":      txtid,
+				"Name":    name,
+				"Jid":     jid,
+				"Webhook": webhook,
+				"Token":   token,
+				"Proxy":   proxy_url,
+				"Events":  events,
+				"History": fmt.Sprintf("%d", history),
 			}}
 			userinfocache.Set(token, v, cache.NoExpiration)
 			// Gets and set subscription to webhook events
@@ -315,53 +301,6 @@ func (s *server) connectOnStartup() {
 			log.Info().Str("events", eventstring).Str("jid", jid).Msg("Attempt to connect")
 			killchannel.Create(txtid)
 			go s.startClient(txtid, jid, token, subscribedEvents)
-
-			// Initialize S3 client if configured
-			go func(userID string) {
-				var s3Config struct {
-					Enabled       bool   `db:"s3_enabled"`
-					Endpoint      string `db:"s3_endpoint"`
-					Region        string `db:"s3_region"`
-					Bucket        string `db:"s3_bucket"`
-					AccessKey     string `db:"s3_access_key"`
-					SecretKey     string `db:"s3_secret_key"`
-					PathStyle     bool   `db:"s3_path_style"`
-					PublicURL     string `db:"s3_public_url"`
-					RetentionDays int    `db:"s3_retention_days"`
-				}
-
-				err := s.db.Get(&s3Config, `
-					SELECT s3_enabled, s3_endpoint, s3_region, s3_bucket, 
-						   s3_access_key, s3_secret_key, s3_path_style, 
-						   s3_public_url, s3_retention_days
-					FROM users WHERE id = $1`, userID)
-
-				if err != nil {
-					log.Error().Err(err).Str("userID", userID).Msg("Failed to get S3 config")
-					return
-				}
-
-				if s3Config.Enabled {
-					config := &S3Config{
-						Enabled:       s3Config.Enabled,
-						Endpoint:      s3Config.Endpoint,
-						Region:        s3Config.Region,
-						Bucket:        s3Config.Bucket,
-						AccessKey:     s3Config.AccessKey,
-						SecretKey:     s3Config.SecretKey,
-						PathStyle:     s3Config.PathStyle,
-						PublicURL:     s3Config.PublicURL,
-						RetentionDays: s3Config.RetentionDays,
-					}
-
-					err = GetS3Manager().InitializeS3Client(userID, config)
-					if err != nil {
-						log.Error().Err(err).Str("userID", userID).Msg("Failed to initialize S3 client on startup")
-					} else {
-						log.Info().Str("userID", userID).Msg("S3 client initialized on startup")
-					}
-				}
-			}(txtid)
 		}
 	}
 	err = rows.Err()
@@ -563,8 +502,7 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 			for evt := range qrChan {
 				if evt.Event == "code" {
 					// Display QR code in terminal (useful for testing/developing)
-					// Skip in stdio mode to avoid breaking JSON-RPC
-					if *logType != "json" && s.mode != Stdio {
+					if *logType != "json" {
 						qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 						fmt.Println("QR code:\n", evt.Code)
 					}
@@ -722,15 +660,6 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 			time.Sleep(1000 * time.Millisecond)
 		}
 	}
-}
-
-func fileToBase64(filepath string) (string, string, error) {
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		return "", "", err
-	}
-	mimeType := http.DetectContentType(data)
-	return base64.StdEncoding.EncodeToString(data), mimeType, nil
 }
 
 func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
@@ -896,28 +825,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			return
 		}
 
-		var s3Config struct {
-			Enabled       string `db:"s3_enabled"`
-			MediaDelivery string `db:"media_delivery"`
-		}
-
 		lastMessageCache.Set(mycli.userID, &evt.Info, cache.DefaultExpiration)
-		myuserinfo, found := userinfocache.Get(mycli.token)
-		if !found {
-			log.Warn().Str("userID", txtid).Msg("User info not in cache, using defaults")
-			s3Config.Enabled = "false"
-			s3Config.MediaDelivery = "base64"
-		} else {
-			// Adicionar verificação de tipo segura
-			if values, ok := myuserinfo.(Values); ok {
-				s3Config.Enabled = values.Get("S3Enabled")
-				s3Config.MediaDelivery = values.Get("MediaDelivery")
-			} else {
-				log.Warn().Msg("Invalid type in userinfocache, using defaults")
-				s3Config.Enabled = "false"
-				s3Config.MediaDelivery = "base64"
-			}
-		}
 
 		postmap["type"] = "Message"
 		dowebhook = 1
@@ -982,27 +890,14 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		if !*skipMedia {
 
-			isIncoming := !evt.Info.IsFromMe
-			chatJID := evt.Info.Sender.String()
-			if evt.Info.IsGroup {
-				chatJID = evt.Info.Chat.String()
-			}
-
-			s3cfg := mediaS3Config{
-				Enabled:       s3Config.Enabled,
-				MediaDelivery: s3Config.MediaDelivery,
-			}
-
 			if img := evt.Message.GetImageMessage(); img != nil {
 				mycli.processMedia(img, img.GetMimetype(), ".jpg",
-					downloadTimeoutImage, isIncoming, chatJID,
-					evt.Info.ID, s3cfg, postmap, nil)
+					downloadTimeoutImage, evt.Info.ID, postmap, nil)
 			}
 
 			if audio := evt.Message.GetAudioMessage(); audio != nil {
 				mycli.processMedia(audio, audio.GetMimetype(), ".ogg",
-					downloadTimeoutAudio, isIncoming, chatJID,
-					evt.Info.ID, s3cfg, postmap, nil)
+					downloadTimeoutAudio, evt.Info.ID, postmap, nil)
 			}
 
 			if doc := evt.Message.GetDocumentMessage(); doc != nil {
@@ -1011,20 +906,17 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					ext = filepath.Ext(*doc.FileName)
 				}
 				mycli.processMedia(doc, doc.GetMimetype(), ext,
-					downloadTimeoutDocument, isIncoming, chatJID,
-					evt.Info.ID, s3cfg, postmap, nil)
+					downloadTimeoutDocument, evt.Info.ID, postmap, nil)
 			}
 
 			if video := evt.Message.GetVideoMessage(); video != nil {
 				mycli.processMedia(video, video.GetMimetype(), ".mp4",
-					downloadTimeoutVideo, isIncoming, chatJID,
-					evt.Info.ID, s3cfg, postmap, nil)
+					downloadTimeoutVideo, evt.Info.ID, postmap, nil)
 			}
 
 			if sticker := evt.Message.GetStickerMessage(); sticker != nil {
 				mycli.processMedia(sticker, sticker.GetMimetype(), ".webp",
-					downloadTimeoutSticker, isIncoming, chatJID,
-					evt.Info.ID, s3cfg, postmap, map[string]interface{}{
+					downloadTimeoutSticker, evt.Info.ID, postmap, map[string]interface{}{
 						"isSticker":       true,
 						"stickerAnimated": sticker.GetIsAnimated(),
 					})
@@ -1129,13 +1021,6 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				if conv := evt.Message.GetConversation(); conv != "" {
 					// Check if the message has reply context (this depends on WhatsApp message structure)
 					// For now, we'll rely on ExtendedTextMessage for reply detection
-				}
-			}
-
-			// Try to get media link from S3 data if available
-			if s3Data, ok := postmap["s3"].(map[string]interface{}); ok {
-				if url, ok := s3Data["url"].(string); ok {
-					mediaLink = url
 				}
 			}
 

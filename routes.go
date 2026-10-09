@@ -23,9 +23,6 @@ func (s *server) routes() {
 
 	var routerLog zerolog.Logger
 	logOutput := os.Stdout
-	if s.mode == Stdio {
-		logOutput = os.Stderr
-	}
 	if *logType == "json" {
 		routerLog = zerolog.New(logOutput).
 			With().
@@ -99,11 +96,6 @@ func (s *server) routes() {
 
 	s.router.Handle("/session/proxy", c.Then(s.SetProxy())).Methods("POST")
 	s.router.Handle("/session/history", c.Then(s.SetHistory())).Methods("POST")
-
-	s.router.Handle("/session/s3/config", c.Then(s.ConfigureS3())).Methods("POST")
-	s.router.Handle("/session/s3/config", c.Then(s.GetS3Config())).Methods("GET")
-	s.router.Handle("/session/s3/config", c.Then(s.DeleteS3Config())).Methods("DELETE")
-	s.router.Handle("/session/s3/test", c.Then(s.TestS3Connection())).Methods("POST")
 
 	s.router.Handle("/chat/send/text", c.Then(s.SendMessage())).Methods("POST")
 	s.router.Handle("/chat/delete", c.Then(s.DeleteMessage())).Methods("POST")

@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"mime"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -21,11 +20,6 @@ const (
 	downloadTimeoutVideo    = 10 * time.Minute
 	downloadTimeoutSticker  = 1 * time.Minute
 )
-
-type mediaS3Config struct {
-	Enabled       string
-	MediaDelivery string
-}
 
 // DownloadResult é retornado por downloadMedia para handlers HTTP
 type DownloadResult struct {
@@ -123,19 +117,10 @@ func (mycli *MyClient) processMedia(
 	mimeType string,
 	fallbackExt string,
 	timeout time.Duration,
-	isIncoming bool,
-	chatJID string,
 	messageID string,
-	s3cfg mediaS3Config,
 	postmap map[string]interface{},
 	extraKeys map[string]interface{},
 ) {
-	tmpDir := filepath.Join("/tmp", "user_"+mycli.userID)
-	if err := os.MkdirAll(tmpDir, 0751); err != nil {
-		log.Error().Err(err).Msg("Could not create temporary directory")
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -149,52 +134,14 @@ func (mycli *MyClient) processMedia(
 	if exts, _ := mime.ExtensionsByType(mimeType); len(exts) > 0 {
 		ext = exts[0]
 	}
-	tmpPath := filepath.Join(tmpDir, messageID+ext)
 
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		log.Error().Err(err).Msg("Failed to save media to temporary file")
-		return
-	}
-	defer func() {
-		if err := os.Remove(tmpPath); err != nil {
-			log.Error().Err(err).Msg("Failed to delete temporary file")
-		} else {
-			log.Info().Str("path", tmpPath).Msg("Temporary file deleted")
-		}
-	}()
-
-	if s3cfg.Enabled == "true" && (s3cfg.MediaDelivery == "s3" || s3cfg.MediaDelivery == "both") {
-		s3Data, err := GetS3Manager().ProcessMediaForS3(
-			context.Background(),
-			mycli.userID,
-			chatJID,
-			messageID,
-			data,
-			mimeType,
-			filepath.Base(tmpPath),
-			isIncoming,
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to upload media to S3")
-		} else {
-			postmap["s3"] = s3Data
-		}
-	}
-
-	if s3cfg.MediaDelivery == "base64" || s3cfg.MediaDelivery == "both" {
-		b64, mime_, err := fileToBase64(tmpPath)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to convert media to base64")
-			return
-		}
-		postmap["base64"] = b64
-		postmap["mimeType"] = mime_
-		postmap["fileName"] = filepath.Base(tmpPath)
-	}
+	postmap["base64"] = base64.StdEncoding.EncodeToString(data)
+	postmap["mimeType"] = mimeType
+	postmap["fileName"] = messageID + ext
 
 	for k, v := range extraKeys {
 		postmap[k] = v
 	}
 
-	log.Info().Str("path", tmpPath).Msg("Media processed")
+	log.Info().Str("messageID", messageID).Msg("Media processed")
 }
