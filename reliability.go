@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,7 @@ import (
 var deliveryStats = struct {
 	webhookSent      atomic.Uint64
 	webhookFailed    atomic.Uint64
+	webhookShed      atomic.Uint64 // eventos desviados p/ DLQ sem tentar HTTP (semáforo cheio/shutdown)
 	rabbitPublished  atomic.Uint64
 	rabbitFailed     atomic.Uint64
 	rabbitDisabled   atomic.Uint64 // eventos Rabbit descartados com broker fora
@@ -36,15 +38,66 @@ var deliveryStats = struct {
 	dlqDiskFallback  atomic.Uint64 // DLQs preservadas em disco (Rabbit fora)
 }{}
 
+// shutdownCh é fechado quando o shutdown começa. Sleeps de backoff e acquires
+// de semáforo observam este canal para acordar mais cedo e escoar para a DLQ
+// em vez de serem mortos no meio pelo os.Exit.
+var shutdownCh = make(chan struct{})
+
+// signalShutdown fecha shutdownCh (idempotente via sync.Once do chamador ou
+// comparação com recover). Deve ser chamado uma única vez no início do shutdown.
+func signalShutdown() {
+	select {
+	case <-shutdownCh:
+		// já fechado
+	default:
+		close(shutdownCh)
+	}
+}
+
+// shutdownStarted informa se o processo já entrou em shutdown.
+func shutdownStarted() bool {
+	select {
+	case <-shutdownCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// sleepOrShutdown dorme d mas acorda mais cedo se o shutdown começar.
+// Retorna false quando interrompido (chamador deve escoar para DLQ, não retentar).
+func sleepOrShutdown(d time.Duration) bool {
+	if d <= 0 {
+		return !shutdownStarted()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-shutdownCh:
+		return false
+	}
+}
+
 // bgDeliveries rastreia goroutines de entrega (webhook/Rabbit global) para o
 // graceful shutdown aguardá-las.
 var bgDeliveries sync.WaitGroup
 
-// trackBackground executa fn em goroutine rastreada pelo shutdown.
+// trackBackground executa fn em goroutine rastreada pelo shutdown, com
+// recover para que um panic numa entrega não derrube o processo inteiro.
 func trackBackground(fn func()) {
 	bgDeliveries.Add(1)
 	go func() {
 		defer bgDeliveries.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Bytes("stack", debug.Stack()).
+					Msg("Panic em entrega background (recuperado, processo preservado)")
+			}
+		}()
 		fn()
 	}()
 }

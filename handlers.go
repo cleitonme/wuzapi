@@ -116,6 +116,7 @@ func (s *server) GetHealth() http.HandlerFunc {
 			Delivery: map[string]uint64{
 				"webhook_sent":     deliveryStats.webhookSent.Load(),
 				"webhook_failed":   deliveryStats.webhookFailed.Load(),
+				"webhook_shed":     deliveryStats.webhookShed.Load(),
 				"rabbit_published": deliveryStats.rabbitPublished.Load(),
 				"rabbit_failed":    deliveryStats.rabbitFailed.Load(),
 				"rabbit_disabled":  deliveryStats.rabbitDisabled.Load(),

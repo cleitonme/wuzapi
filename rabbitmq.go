@@ -318,66 +318,6 @@ func PublishToRabbit(data []byte, queueOverride ...string) error {
 	return err
 }
 
-func sendToGlobalRabbit(jsonData []byte, token string, userID string, queueName ...string) {
-	if !rabbitIsEnabled() {
-		// Check if RabbitMQ is configured but disabled due to connection issues
-		rabbitURL := os.Getenv("RABBITMQ_URL")
-		rabbitQueueEnv := os.Getenv("RABBITMQ_QUEUE")
-
-		if rabbitURL != "" || rabbitQueueEnv != "" {
-			urlSet := "no"
-			if rabbitURL != "" {
-				urlSet = "yes"
-			}
-			queueSet := "no"
-			if rabbitQueueEnv != "" {
-				queueSet = "yes"
-			}
-			log.Error().
-				Str("rabbitmq_url_set", urlSet).
-				Str("rabbitmq_queue_set", queueSet).
-				Msg("RabbitMQ is configured but disabled due to connection failure. Event not published to queue.")
-		} else {
-			log.Debug().Msg("RabbitMQ not configured. Event not published to queue.")
-		}
-		deliveryStats.rabbitDisabled.Add(1)
-		return
-	}
-
-	// Extract instance information
-	instance_name := ""
-	userinfo, found := userinfocache.Get(token)
-	if found {
-		instance_name = userinfo.(Values).Get("Name")
-	}
-
-	// Parse the original JSON into a map
-	var originalData map[string]interface{}
-	err := json.Unmarshal(jsonData, &originalData)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to unmarshal original JSON data for RabbitMQ")
-		return
-	}
-
-	// Add the new fields directly to the original data
-	originalData["userID"] = userID
-	originalData["instanceName"] = instance_name
-
-	// Marshal back to JSON
-	enhancedJSON, err := json.Marshal(originalData)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal enhanced data for RabbitMQ")
-		return
-	}
-
-	err = PublishToRabbit(enhancedJSON, queueName...)
-	if err != nil {
-		// Descarte intencional do evento Rabbit: o webhook HTTP segue seu
-		// próprio caminho e não é afetado. Só métrica + log.
-		log.Warn().Err(err).Msg("Failed to publish to RabbitMQ (webhook delivery unaffected)")
-	}
-}
-
 // PublishFileErrorToQueue tenta a DLQ no Rabbit; retorna erro para que o
 // chamador preserve o payload em disco. Nunca descarta silenciosamente.
 func PublishFileErrorToQueue(payload WebhookFileErrorPayload) error {

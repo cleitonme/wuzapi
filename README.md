@@ -110,7 +110,6 @@ TZ=America/New_York
 WEBHOOK_FORMAT=json
 SESSION_DEVICE_NAME=WuzAPI
 WUZAPI_PORT=8080
-WUZAPI_GLOBAL_WEBHOOK=https://your-global-webhook.url
 WEBHOOK_RETRY_ENABLED=true
 WEBHOOK_RETRY_COUNT=2
 WEBHOOK_RETRY_DELAY_SECONDS=30
@@ -146,11 +145,10 @@ TZ=America/New_York
 WEBHOOK_FORMAT=json # or "form" for the default
 SESSION_DEVICE_NAME=WuzAPI
 WUZAPI_PORT=8080 # Port for the WuzAPI server
-WUZAPI_GLOBAL_WEBHOOK= # Global webhook URL for all instances
 ```
 
-### RabbitMQ Integration
-WuzAPI supports sending WhatsApp events to a RabbitMQ queue for global event distribution. When enabled, all WhatsApp events will be published to the specified queue regardless of individual user webhook configurations.
+### RabbitMQ Integration (DLQ for failed webhooks)
+WuzAPI publishes failed-webhook payloads to a RabbitMQ dead-letter queue, with on-disk spool fallback when the broker is down.
 
 Set these environment variables to enable RabbitMQ integration:
 
@@ -161,10 +159,9 @@ RABBITMQ_QUEUE=whatsapp  # Optional (default: whatsapp_events)
 
 When enabled:
 
-* All WhatsApp events (messages, presence updates, etc.) will be published to the configured queue regardless of event subscritions for regular webhooks
-* Events will include the userId and instanceName
-* This works alongside webhook configurations - events will be sent to both RabbitMQ and any configured webhooks
-* The integration is global and affects all instances
+* Failed-webhook payloads are published to the `webhook_errors` queue (configurable via `WEBHOOK_ERROR_QUEUE_NAME`)
+* If RabbitMQ is down, payloads are preserved on disk (`WEBHOOK_ERROR_SPOOL_DIR`, default `dbdata/webhook_errors`) instead of being silently dropped
+* Only user webhooks receive live events — there is no global event fan-out
 
 #### Key configuration options:
 

@@ -88,6 +88,16 @@ type WebhookErrorPayload struct {
 	AttemptTime  time.Time              `json:"attemptTime"`
 	ErrorMessage string                 `json:"errorMessage"`
 }
+
+// stringMapToInterface converte payload form (string->string) para o formato
+// da DLQ sem duplicar lógica nos callers.
+func stringMapToInterface(m map[string]string) map[string]interface{} {
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
 type openGraphResult struct {
 	Title       string
 	Description string
@@ -246,6 +256,29 @@ func callHook(myurl string, payload map[string]string, userID string) {
 	log.Info().Str("url", myurl).Str("userID", userID).Msg("Sending POST to client with retry logic")
 
 	client := clientManager.GetHTTPClient(userID)
+	if client == nil {
+		// Sessão desconectada/limpa no meio do caminho: sem cliente HTTP não há
+		// como entregar. Escoa direto para DLQ em vez de panic (nil deref).
+		lastError := fmt.Errorf("no HTTP client for user (session disconnected?)")
+		deliveryStats.webhookFailed.Add(1)
+		log.Error().Str("url", myurl).Str("userID", userID).Msg("Webhook sem HTTP client, enviando para DLQ...")
+		preserveDLQ("data", func() error {
+			return PublishDataErrorToQueue(WebhookErrorPayload{
+				URL:          myurl,
+				Payload:      stringMapToInterface(payload),
+				UserID:       userID,
+				AttemptTime:  time.Now(),
+				ErrorMessage: lastError.Error(),
+			})
+		}, userID, WebhookErrorPayload{
+			URL:          myurl,
+			Payload:      stringMapToInterface(payload),
+			UserID:       userID,
+			AttemptTime:  time.Now(),
+			ErrorMessage: lastError.Error(),
+		})
+		return
+	}
 
 	// Retry settings
 	maxRetries := 1
@@ -274,7 +307,12 @@ func callHook(myurl string, payload map[string]string, userID string) {
 				Dur("delay", delayDuration).
 				Msg("Retrying webhook request with exponential backoff...")
 
-			time.Sleep(delayDuration)
+			// Sleep interrompível: se o shutdown começar no meio do backoff,
+			// escoa para DLQ em vez de ser morto sem destino.
+			if !sleepOrShutdown(delayDuration) {
+				lastError = fmt.Errorf("shutdown durante backoff do webhook (tentativa %d de %d): %w", attempt+1, maxRetries, lastError)
+				break
+			}
 		}
 
 		var req *resty.Request
@@ -364,6 +402,34 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 	log.Info().Str("file", file).Str("url", myurl).Msg("Sending POST with retry logic")
 
 	client := clientManager.GetHTTPClient(userID)
+	if client == nil {
+		lastError := fmt.Errorf("no HTTP client for user (session disconnected?)")
+		deliveryStats.webhookFailed.Add(1)
+		log.Error().Str("url", myurl).Str("userID", userID).Msg("File webhook sem HTTP client, enviando para DLQ...")
+		finalPayload := make(map[string]string, len(payload)+1)
+		for k, v := range payload {
+			finalPayload[k] = v
+		}
+		finalPayload["file"] = file
+		preserveDLQ("file", func() error {
+			return PublishFileErrorToQueue(WebhookFileErrorPayload{
+				URL:          myurl,
+				Payload:      stringMapToInterface(finalPayload),
+				UserID:       userID,
+				FilePath:     file,
+				AttemptTime:  time.Now(),
+				ErrorMessage: lastError.Error(),
+			})
+		}, userID, WebhookFileErrorPayload{
+			URL:          myurl,
+			Payload:      stringMapToInterface(finalPayload),
+			UserID:       userID,
+			FilePath:     file,
+			AttemptTime:  time.Now(),
+			ErrorMessage: lastError.Error(),
+		})
+		return fmt.Errorf("webhook failed permanently: %w", lastError)
+	}
 
 	maxRetries := 1
 	if *webhookRetryEnabled {
@@ -394,7 +460,12 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 				Dur("delay", delayDuration).
 				Msg("Retrying file webhook request with exponential backoff...")
 
-			time.Sleep(delayDuration)
+			// Sleep interrompível: se o shutdown começar no meio do backoff,
+			// escoa para DLQ em vez de ser morto sem destino.
+			if !sleepOrShutdown(delayDuration) {
+				lastError = fmt.Errorf("shutdown durante backoff do file webhook (tentativa %d de %d): %w", attempt+1, maxRetries, lastError)
+				break
+			}
 		}
 
 		var req *resty.Request

@@ -78,8 +78,8 @@ func TestRabbitConnectionSwapConcurrent(t *testing.T) {
 		}
 	}()
 
-	// Publisher goroutines: what `trackBackground(sendToGlobalRabbit)` in
-	// wmiau.go does on every event. While disabled every publish must fail
+	// Publisher goroutines: what event dispatch does on every event while the
+	// broker is down. While disabled every publish must fail
 	// with the sentinel (never nil-channel deref, never silent success).
 	for g := 0; g < 8; g++ {
 		wg.Add(1)

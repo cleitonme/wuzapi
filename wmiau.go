@@ -69,6 +69,42 @@ func webhookAcquire(userID string) func() {
 	return func() { <-sema }
 }
 
+// webhookAcquireTimeoutSeconds limita quanto tempo uma entrega aguarda vaga no
+// semáforo do usuário. Sem timeout, um outage do receptor preenche os 20 slots
+// (cada retry dorme minutos) e as entregas seguintes travam para sempre —
+// inclusive no shutdown, que nunca termina.
+const webhookAcquireTimeoutSeconds = 30
+
+// webhookAcquireTimeout tenta adquirir vaga com timeout e observando o shutdown.
+// Retorna ok=false quando deve escoar direto para DLQ em vez de bloquear.
+func webhookAcquireTimeout(userID string, timeout time.Duration) (release func(), ok bool) {
+	sema := webhookSemaFor(userID)
+	select {
+	case sema <- struct{}{}:
+		return func() { <-sema }, true
+	case <-time.After(timeout):
+		return nil, false
+	case <-shutdownCh:
+		return nil, false
+	}
+}
+
+// shedToDLQ preserva um evento que nem chegou a tentar o HTTP (semáforo cheio
+// ou shutdown em andamento). Última linha de defesa contra perda silenciosa.
+func shedToDLQ(webhookurl string, data map[string]string, userID, reason string) {
+	deliveryStats.webhookShed.Add(1)
+	log.Error().Str("url", webhookurl).Str("userID", userID).Str("reason", reason).
+		Msg("Webhook sem tentativa HTTP, desviando para DLQ...")
+	errPayload := WebhookErrorPayload{
+		URL:          webhookurl,
+		Payload:      stringMapToInterface(data),
+		UserID:       userID,
+		AttemptTime:  time.Now(),
+		ErrorMessage: reason,
+	}
+	preserveDLQ("data", func() error { return PublishDataErrorToQueue(errPayload) }, userID, errPayload)
+}
+
 // db field declaration as *sqlx.DB
 type MyClient struct {
 	WAClient       *whatsmeow.Client
@@ -78,27 +114,6 @@ type MyClient struct {
 	subscriptions  []string
 	db             *sqlx.DB
 	s              *server
-}
-
-func sendToGlobalWebHook(jsonData []byte, token string, userID string) {
-	jsonDataStr := string(jsonData)
-
-	instance_name := ""
-	userinfo, found := userinfocache.Get(token)
-	if found {
-		instance_name = userinfo.(Values).Get("Name")
-	}
-
-	if *globalWebhook != "" {
-		log.Info().Str("url", *globalWebhook).Msg("Calling global webhook")
-		// Add extra information for the global webhook
-		globalData := map[string]string{
-			"jsonData":     jsonDataStr,
-			"userID":       userID,
-			"instanceName": instance_name,
-		}
-		callHook(*globalWebhook, globalData, userID)
-	}
 }
 
 func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID string, token string) {
@@ -121,14 +136,30 @@ func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID s
 
 		if path == "" {
 			trackBackground(func() {
-				release := webhookAcquire(userID)
+				release, ok := webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
+				if !ok {
+					reason := "semáforo de webhook cheio (receptor lento?)"
+					if shutdownStarted() {
+						reason = "shutdown em andamento"
+					}
+					shedToDLQ(webhookurl, data, userID, reason)
+					return
+				}
 				defer release()
 				callHook(webhookurl, data, userID)
 			})
 		} else {
 			// Chamar em background para não bloquear o handler
 			trackBackground(func() {
-				release := webhookAcquire(userID)
+				release, ok := webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
+				if !ok {
+					reason := "semáforo de webhook cheio (receptor lento?)"
+					if shutdownStarted() {
+						reason = "shutdown em andamento"
+					}
+					shedToDLQ(webhookurl, data, userID, reason)
+					return
+				}
 				defer release()
 				if err := callHookFile(webhookurl, data, userID, path); err != nil {
 					log.Error().Err(err).Msg("Error calling hook file")
@@ -205,11 +236,7 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 		return
 	}
 
-	// Sinks globais sempre recebem, em goroutines rastreadas para que o
-	// graceful shutdown as aguarde. São independentes: falha no Rabbit
-	// nunca afeta a entrega do webhook HTTP e vice-versa.
-	trackBackground(func() { sendToGlobalWebHook(jsonData, mycli.token, mycli.userID) })
-	trackBackground(func() { sendToGlobalRabbit(jsonData, mycli.token, mycli.userID) })
+	// Apenas o webhook do usuário recebe eventos (dispatch global removido).
 
 	// Get updated events from cache/database
 	subscribedEvents, err := updateAndGetUserSubscriptions(mycli)

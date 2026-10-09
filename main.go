@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -48,7 +47,6 @@ var (
 	sslcert             = flag.String("sslcertificate", "", "SSL Certificate File")
 	sslprivkey          = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
 	adminToken          = flag.String("admintoken", "", "Security Token to authorize admin actions (list/create/remove users)")
-	globalWebhook       = flag.String("globalwebhook", "", "Global webhook URL to receive all events from all users")
 	versionFlag         = flag.Bool("version", false, "Display version information and exit")
 	dataDir             = flag.String("datadir", "", "Data directory for database and session files (defaults to executable directory)")
 
@@ -326,16 +324,6 @@ func main() {
 		}
 	}
 
-	// Check for global webhook in environment variable
-	if *globalWebhook == "" {
-		if v := os.Getenv("WUZAPI_GLOBAL_WEBHOOK"); v != "" {
-			*globalWebhook = v
-			log.Info().Str("global_webhook", v).Msg("Global webhook configured from environment variable")
-		}
-	} else {
-		log.Info().Str("global_webhook", *globalWebhook).Msg("Global webhook configured from command line")
-	}
-
 	InitRabbitMQ()
 
 	ex, err := os.Executable()
@@ -456,42 +444,48 @@ func startHTTPMode(s *server) {
 		IdleTimeout:       180 * time.Second,
 	}
 
-	done := make(chan os.Signal, 1)
+	done := make(chan os.Signal, 2)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-
-	var once sync.Once
 
 	// Wait for signals in a separate goroutine
 	go func() {
-		for {
+		<-done
+		log.Warn().Msg("Stopping server...")
+		// Acorda sleeps de backoff e acquires de semáforo: entregas em voo
+		// escoam para DLQ/spool em vez de serem mortas no meio pelo os.Exit.
+		signalShutdown()
+
+		// Segundo sinal força saída imediata (escape hatch).
+		go func() {
 			<-done
-			once.Do(func() {
-				log.Warn().Msg("Stopping server...")
+			log.Error().Msg("Second signal received, forcing exit")
+			os.Exit(1)
+		}()
 
-				// Graceful shutdown logic
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
+		// Fecha o HTTP, mas SEMPRE aguarda as entregas em voo depois, mesmo
+		// se o Shutdown falhar. Antes, um erro aqui dava os.Exit(1) e pulava
+		// o waitBackground — entregas abortadas sem destino ("fechado sem
+		// ter terminado").
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
 
-				if err := srv.Shutdown(ctx); err != nil {
-					log.Error().Err(err).Msg("Failed to stop server")
-					os.Exit(1)
-				}
-
-				// Aguarda entregas em voo (webhooks em retry/backoff,
-				// publishes Rabbit) até o timeout configurado. Sem isso,
-				// mensagens em retry são abortadas no shutdown.
-				waitTimeout := time.Duration(*shutdownTimeoutSeconds) * time.Second
-				log.Info().Dur("timeout", waitTimeout).Msg("Waiting for in-flight webhook/Rabbit deliveries...")
-				if waitBackground(waitTimeout) {
-					log.Info().Msg("All in-flight deliveries completed")
-				} else {
-					log.Warn().Dur("timeout", waitTimeout).Msg("Shutdown timeout reached with deliveries still in flight (failed webhooks were preserved via DLQ/disk spool)")
-				}
-
-				log.Info().Msg("Server Exited Properly")
-				os.Exit(0)
-			})
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("HTTP shutdown retornou erro (aguardando entregas mesmo assim)")
 		}
+
+		// Aguarda entregas em voo (webhooks em retry/backoff,
+		// publishes Rabbit) até o timeout configurado. Sem isso,
+		// mensagens em retry são abortadas no shutdown.
+		waitTimeout := time.Duration(*shutdownTimeoutSeconds) * time.Second
+		log.Info().Dur("timeout", waitTimeout).Msg("Waiting for in-flight webhook/Rabbit deliveries...")
+		if waitBackground(waitTimeout) {
+			log.Info().Msg("All in-flight deliveries completed")
+		} else {
+			log.Warn().Dur("timeout", waitTimeout).Msg("Shutdown timeout reached with deliveries still in flight (failed webhooks were preserved via DLQ/disk spool)")
+		}
+
+		log.Info().Msg("Server Exited Properly")
+		os.Exit(0)
 	}()
 
 	go func() {
