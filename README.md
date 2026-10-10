@@ -64,7 +64,6 @@ you can use to alter behaviour
 * -loglevel : sets log level: debug, info (default), warn, error
 * -color : enable colored output for console logs
 * -osname : Connection OS Name in Whatsapp
-* -skipmedia : Skip downloading media from messages
 * -wadebug : enable whatsmeow debug, either INFO or DEBUG levels are suported
 
 * -sslcertificate : SSL Certificate File

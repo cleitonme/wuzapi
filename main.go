@@ -40,7 +40,6 @@ var (
 	waDebug             = flag.String("wadebug", "", "Enable whatsmeow debug (INFO or DEBUG)")
 	logType             = flag.String("logtype", "console", "Type of log output (console or json)")
 	logLevel            = flag.String("loglevel", "error", "Log level (debug, info, warn, error)")
-	skipMedia           = flag.Bool("skipmedia", true, "Do not attempt to download media in messages")
 	osName              = flag.String("osname", "Mac OS 10", "Connection OSName in Whatsapp")
 	platformType        = flag.String("platformtype", "DESKTOP", "Device platform type (DESKTOP, IPAD, ANDROID_TABLET, IOS_PHONE, ANDROID_PHONE, etc.)")
 	colorOutput         = flag.Bool("color", true, "Enable colored output for console logs")

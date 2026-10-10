@@ -119,6 +119,7 @@ func (s *server) GetHealth() http.HandlerFunc {
 				"webhook_sent":     deliveryStats.webhookSent.Load(),
 				"webhook_failed":   deliveryStats.webhookFailed.Load(),
 				"webhook_shed":     deliveryStats.webhookShed.Load(),
+				"history_save_failed": deliveryStats.historySaveFailed.Load(),
 				"outbox_delivered": deliveryStats.outboxDelivered.Load(),
 				"outbox_expired":   deliveryStats.outboxExpired.Load(),
 				"outbox_dropped":   deliveryStats.outboxDropped.Load(),
@@ -127,6 +128,10 @@ func (s *server) GetHealth() http.HandlerFunc {
 				"rabbit_disabled":  deliveryStats.rabbitDisabled.Load(),
 				"dlq_rabbit":       deliveryStats.dlqRabbit.Load(),
 				"dlq_disk":         deliveryStats.dlqDiskFallback.Load(),
+				"undecryptable_total":     undecryptableStats.total.Load(),
+				"undecryptable_recovered": undecryptableStats.recovered.Load(),
+				"undecryptable_gave_up":   undecryptableStats.gaveUp.Load(),
+				"undecryptable_skipped":   undecryptableStats.skipped.Load(),
 			},
 		}
 		response.OutboxPending, response.OutboxOldestAge = outboxPendingStats(s.db)

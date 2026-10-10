@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"mime"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -110,38 +107,4 @@ func buildAndDownloadSticker(ctx context.Context, client *whatsmeow.Client, p me
 		FileSHA256: p.FileSHA256, FileLength: &p.FileLength,
 	}}
 	return downloadMedia(ctx, client, msg.GetStickerMessage(), p.MimeType, downloadTimeoutSticker)
-}
-
-func (mycli *MyClient) processMedia(
-	msg whatsmeow.DownloadableMessage,
-	mimeType string,
-	fallbackExt string,
-	timeout time.Duration,
-	messageID string,
-	postmap map[string]interface{},
-	extraKeys map[string]interface{},
-) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	data, err := mycli.WAClient.Download(ctx, msg)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to download media")
-		return
-	}
-
-	ext := fallbackExt
-	if exts, _ := mime.ExtensionsByType(mimeType); len(exts) > 0 {
-		ext = exts[0]
-	}
-
-	postmap["base64"] = base64.StdEncoding.EncodeToString(data)
-	postmap["mimeType"] = mimeType
-	postmap["fileName"] = messageID + ext
-
-	for k, v := range extraKeys {
-		postmap[k] = v
-	}
-
-	log.Info().Str("messageID", messageID).Msg("Media processed")
 }

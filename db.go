@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -129,8 +130,14 @@ func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID, mes
 		query = `INSERT OR IGNORE INTO message_history (user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	}
-	_, err := s.db.Exec(query, userID, chatJID, senderJID, messageID, time.Now(), messageType, textContent, mediaLink, quotedMessageID, dataJson)
+	// Timeout curto: este INSERT roda na thread do handler de eventos do
+	// whatsmeow (fila sequencial). Sem timeout, um banco lento trava o
+	// recebimento de todas as mensagens da conexão.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, query, userID, chatJID, senderJID, messageID, time.Now(), messageType, textContent, mediaLink, quotedMessageID, dataJson)
 	if err != nil {
+		deliveryStats.historySaveFailed.Add(1)
 		return fmt.Errorf("failed to save message to history: %w", err)
 	}
 	return nil
