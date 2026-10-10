@@ -28,19 +28,25 @@ import (
 
 // Métricas de entrega (só memória, expostas em /health).
 var deliveryStats = struct {
-	webhookSent      atomic.Uint64
-	webhookFailed    atomic.Uint64
-	webhookShed      atomic.Uint64 // eventos desviados p/ DLQ sem tentar HTTP (semáforo cheio/shutdown)
-	historySaveFailed atomic.Uint64 // INSERTs no message_history que falharam (gap history x webhook)
-	outboxDelivered  atomic.Uint64 // eventos do outbox entregues pelo worker
-	outboxExpired    atomic.Uint64 // pendências purgadas por retenção (3d)
-	outboxDropped    atomic.Uint64 // pendências descartadas (canal excluído / payload inválido)
-	rabbitPublished  atomic.Uint64
-	rabbitFailed     atomic.Uint64
-	rabbitDisabled   atomic.Uint64 // eventos Rabbit descartados com broker fora
-	dlqRabbit        atomic.Uint64 // DLQs entregues no Rabbit
-	dlqDiskFallback  atomic.Uint64 // DLQs preservadas em disco (Rabbit fora)
+	webhookSent         atomic.Uint64
+	webhookFailed       atomic.Uint64
+	webhookShed         atomic.Uint64 // eventos desviados p/ DLQ sem tentar HTTP (semáforo cheio/shutdown)
+	webhookShedFull     atomic.Uint64 // shed por semáforo cheio (receptor lento — rajadas)
+	webhookShedShutdown atomic.Uint64 // shed por shutdown em andamento
+	historySaveFailed   atomic.Uint64 // INSERTs no message_history que falharam (gap history x webhook)
+	outboxDelivered     atomic.Uint64 // eventos do outbox entregues pelo worker
+	outboxExpired       atomic.Uint64 // pendências purgadas por retenção (3d)
+	outboxDropped       atomic.Uint64 // pendências descartadas (canal excluído / payload inválido)
+	rabbitPublished     atomic.Uint64
+	rabbitFailed        atomic.Uint64
+	rabbitDisabled      atomic.Uint64 // eventos Rabbit descartados com broker fora
+	dlqRabbit           atomic.Uint64 // DLQs entregues no Rabbit
+	dlqDiskFallback     atomic.Uint64 // DLQs preservadas em disco (Rabbit fora)
 }{}
+
+// inflightDeliveries conta entregas em background ativas (webhook/Rabbit).
+// Gauge para diagnóstico de rajada/shutdown (ver /health inflight_deliveries).
+var inflightDeliveries atomic.Int64
 
 // shutdownCh é fechado quando o shutdown começa. Sleeps de backoff e acquires
 // de semáforo observam este canal para acordar mais cedo e escoar para a DLQ
@@ -92,8 +98,10 @@ var bgDeliveries sync.WaitGroup
 // recover para que um panic numa entrega não derrube o processo inteiro.
 func trackBackground(fn func()) {
 	bgDeliveries.Add(1)
+	inflightDeliveries.Add(1)
 	go func() {
 		defer bgDeliveries.Done()
+		defer inflightDeliveries.Add(-1)
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error().

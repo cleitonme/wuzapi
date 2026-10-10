@@ -254,6 +254,13 @@ func updateUserInfo(values interface{}, field string, value string) interface{} 
 // doHookPost executa UMA tentativa de POST do webhook (sem retry).
 // Compartilhado entre callHook (loop com backoff) e o worker do outbox.
 func doHookPost(client *resty.Client, myurl string, payload map[string]string, userID string) error {
+	return doHookPostWithTimeout(client, myurl, payload, userID, 0)
+}
+
+// doHookPostWithTimeout é a variante com deadline própria. O worker do outbox
+// usa timeout menor que o do caminho ao vivo (OUTBOX_HTTP_TIMEOUT_SECONDS)
+// para que um receptor lento não prenda o lote. timeout<=0 usa o do client.
+func doHookPostWithTimeout(client *resty.Client, myurl string, payload map[string]string, userID string, timeout time.Duration) error {
 	var body interface{} = payload
 
 	format := os.Getenv("WEBHOOK_FORMAT")
@@ -279,6 +286,12 @@ func doHookPost(client *resty.Client, myurl string, payload map[string]string, u
 		req = client.R().SetFormData(payload)
 	}
 
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		req.SetContext(ctx)
+	}
+
 	resp, postErr := req.Post(myurl)
 	if postErr != nil {
 		return postErr
@@ -291,7 +304,13 @@ func doHookPost(client *resty.Client, myurl string, payload map[string]string, u
 	return nil
 }
 
-// webhook for regular messages
+// webhook for regular messages.
+//
+// O slot do semáforo por usuário é adquirido aqui e LIBERADO durante os
+// sleeps de backoff (readquirido antes da próxima tentativa). Segurar o slot
+// por todo o backoff (até ~12min com receptor morto, retrycount=5/delay=30s)
+// esgotava os 20 slots em rajadas de grupo e jogava tudo para shed. O POST em
+// si continua limitado a webhookMaxInflightPerUser concorrentes por usuário.
 func callHook(myurl string, payload map[string]string, userID string) {
 	log.Info().Str("url", myurl).Str("userID", userID).Msg("Sending POST to client with retry logic")
 
@@ -328,11 +347,27 @@ func callHook(myurl string, payload map[string]string, userID string) {
 		maxRetries = *webhookRetryCount
 	}
 
+	// Adquire o slot SÓ para a duração dos POSTs; backoffs dormem sem slot.
+	release, ok := webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
+	if !ok {
+		reason := "semáforo de webhook cheio (receptor lento?)"
+		if shutdownStarted() {
+			reason = "shutdown em andamento"
+		}
+		shedToDLQ(myurl, payload, userID, reason)
+		return
+	}
+
 	var lastError error
 
 	// Starts the retry loop.
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
+			// Libera o slot durante o backoff para não travar a rajada;
+			// readquire antes da próxima tentativa.
+			release()
+			release = nil
+
 			backoffFactor := 1 << uint(attempt-1)
 
 			// Calculate the final delay.
@@ -353,6 +388,14 @@ func callHook(myurl string, payload map[string]string, userID string) {
 				lastError = fmt.Errorf("shutdown durante backoff do webhook (tentativa %d de %d): %w", attempt+1, maxRetries, lastError)
 				break
 			}
+
+			var reacquired bool
+			release, reacquired = webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
+			if !reacquired {
+				lastError = fmt.Errorf("semáforo cheio ao readquirir slot (tentativa %d de %d): %w", attempt+1, maxRetries, lastError)
+				release = nil
+				break
+			}
 		}
 
 		postErr := doHookPost(client, myurl, payload, userID)
@@ -370,7 +413,15 @@ func callHook(myurl string, payload map[string]string, userID string) {
 
 		log.Info().Str("url", myurl).Msg("Webhook call successful")
 		deliveryStats.webhookSent.Add(1)
+		if release != nil {
+			release()
+			release = nil
+		}
 		return
+	}
+
+	if release != nil {
+		release()
 	}
 
 	if lastError != nil {
@@ -432,6 +483,41 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 
 	var lastError error
 
+	// Slot adquirido aqui e liberado durante os backoffs (ver callHook):
+	// o POST de arquivo também não pode segurar vaga dormindo.
+	release, ok := webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
+	if !ok {
+		lastError = fmt.Errorf("semáforo de webhook cheio (receptor lento?)")
+		if shutdownStarted() {
+			lastError = fmt.Errorf("shutdown em andamento")
+		}
+		deliveryStats.webhookFailed.Add(1)
+		log.Error().Str("url", myurl).Str("userID", userID).Msg("File webhook sem slot, enviando para DLQ...")
+		finalPayload := make(map[string]string, len(payload)+1)
+		for k, v := range payload {
+			finalPayload[k] = v
+		}
+		finalPayload["file"] = file
+		preserveDLQ("file", func() error {
+			return PublishFileErrorToQueue(WebhookFileErrorPayload{
+				URL:          myurl,
+				Payload:      stringMapToInterface(finalPayload),
+				UserID:       userID,
+				FilePath:     file,
+				AttemptTime:  time.Now(),
+				ErrorMessage: lastError.Error(),
+			})
+		}, userID, WebhookFileErrorPayload{
+			URL:          myurl,
+			Payload:      stringMapToInterface(finalPayload),
+			UserID:       userID,
+			FilePath:     file,
+			AttemptTime:  time.Now(),
+			ErrorMessage: lastError.Error(),
+		})
+		return fmt.Errorf("webhook failed permanently: %w", lastError)
+	}
+
 	finalPayload := make(map[string]string)
 	for k, v := range payload {
 		finalPayload[k] = v
@@ -441,6 +527,10 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 	// 2. Loop Retry
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
+			// Libera o slot durante o backoff; readquire antes de retentar.
+			release()
+			release = nil
+
 			backoffFactor := 1 << uint(attempt-1)
 
 			delayDuration := time.Duration(*webhookRetryDelaySeconds) * time.Second * time.Duration(backoffFactor)
@@ -458,6 +548,14 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 			// escoa para DLQ em vez de ser morto sem destino.
 			if !sleepOrShutdown(delayDuration) {
 				lastError = fmt.Errorf("shutdown durante backoff do file webhook (tentativa %d de %d): %w", attempt+1, maxRetries, lastError)
+				break
+			}
+
+			var reacquired bool
+			release, reacquired = webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
+			if !reacquired {
+				lastError = fmt.Errorf("semáforo cheio ao readquirir slot (tentativa %d de %d): %w", attempt+1, maxRetries, lastError)
+				release = nil
 				break
 			}
 		}
@@ -495,7 +593,15 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 
 		log.Info().Int("status", resp.StatusCode()).Str("url", myurl).Msg("File webhook call successful")
 		deliveryStats.webhookSent.Add(1)
+		if release != nil {
+			release()
+			release = nil
+		}
 		return nil
+	}
+
+	if release != nil {
+		release()
 	}
 
 	if lastError != nil {

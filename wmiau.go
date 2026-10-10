@@ -87,6 +87,11 @@ func webhookAcquireTimeout(userID string, timeout time.Duration) (release func()
 // fallback legado (DLQ Rabbit -> spool) se o DB estiver fora.
 func shedToDLQ(webhookurl string, data map[string]string, userID, reason string) {
 	deliveryStats.webhookShed.Add(1)
+	if shutdownStarted() {
+		deliveryStats.webhookShedShutdown.Add(1)
+	} else {
+		deliveryStats.webhookShedFull.Add(1)
+	}
 	log.Error().Str("url", webhookurl).Str("userID", userID).Str("reason", reason).
 		Msg("Webhook sem tentativa HTTP, persistindo...")
 	if outboxDB != nil {
@@ -134,33 +139,16 @@ func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID s
 	if webhookurl != "" {
 		log.Info().Str("url", webhookurl).Msg("Calling user webhook")
 
+		// O slot do semáforo por usuário é gerenciado dentro de
+		// callHook/callHookFile (adquirido só durante os POSTs, liberado nos
+		// backoffs). Aqui só despachamos em background rastreado.
 		if path == "" {
 			trackBackground(func() {
-				release, ok := webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
-				if !ok {
-					reason := "semáforo de webhook cheio (receptor lento?)"
-					if shutdownStarted() {
-						reason = "shutdown em andamento"
-					}
-					shedToDLQ(webhookurl, data, userID, reason)
-					return
-				}
-				defer release()
 				callHook(webhookurl, data, userID)
 			})
 		} else {
 			// Chamar em background para não bloquear o handler
 			trackBackground(func() {
-				release, ok := webhookAcquireTimeout(userID, webhookAcquireTimeoutSeconds*time.Second)
-				if !ok {
-					reason := "semáforo de webhook cheio (receptor lento?)"
-					if shutdownStarted() {
-						reason = "shutdown em andamento"
-					}
-					shedToDLQ(webhookurl, data, userID, reason)
-					return
-				}
-				defer release()
 				if err := callHookFile(webhookurl, data, userID, path); err != nil {
 					log.Error().Err(err).Msg("Error calling hook file")
 				}

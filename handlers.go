@@ -55,11 +55,12 @@ func (s *server) GetHealth() http.HandlerFunc {
 		LoggedInUsers     int                    `json:"logged_in_users"`
 		MemoryStats       map[string]interface{} `json:"memory_stats"`
 		GoRoutines        int                    `json:"goroutines"`
-		Version           string                 `json:"version,omitempty"`
-		RabbitEnabled     bool                   `json:"rabbit_enabled"`
-		Delivery          map[string]uint64      `json:"delivery"`
-		OutboxPending     int64                  `json:"outbox_pending"`
-		OutboxOldestAge   int64                  `json:"outbox_oldest_age_seconds"`
+		Version            string                 `json:"version,omitempty"`
+		RabbitEnabled      bool                   `json:"rabbit_enabled"`
+		Delivery           map[string]uint64      `json:"delivery"`
+		InflightDeliveries int64                  `json:"inflight_deliveries"`
+		OutboxPending      int64                  `json:"outbox_pending"`
+		OutboxOldestAge    int64                  `json:"outbox_oldest_age_seconds"`
 	}
 
 	startTime := time.Now()
@@ -116,9 +117,11 @@ func (s *server) GetHealth() http.HandlerFunc {
 			Version:           version,
 			RabbitEnabled:     rabbitIsEnabled(),
 			Delivery: map[string]uint64{
-				"webhook_sent":     deliveryStats.webhookSent.Load(),
-				"webhook_failed":   deliveryStats.webhookFailed.Load(),
-				"webhook_shed":     deliveryStats.webhookShed.Load(),
+				"webhook_sent":          deliveryStats.webhookSent.Load(),
+				"webhook_failed":        deliveryStats.webhookFailed.Load(),
+				"webhook_shed":          deliveryStats.webhookShed.Load(),
+				"webhook_shed_full":     deliveryStats.webhookShedFull.Load(),
+				"webhook_shed_shutdown": deliveryStats.webhookShedShutdown.Load(),
 				"history_save_failed": deliveryStats.historySaveFailed.Load(),
 				"outbox_delivered": deliveryStats.outboxDelivered.Load(),
 				"outbox_expired":   deliveryStats.outboxExpired.Load(),
@@ -135,6 +138,7 @@ func (s *server) GetHealth() http.HandlerFunc {
 			},
 		}
 		response.OutboxPending, response.OutboxOldestAge = outboxPendingStats(s.db)
+		response.InflightDeliveries = inflightDeliveries.Load()
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

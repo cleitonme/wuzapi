@@ -33,16 +33,32 @@ type outboxConfig struct {
 	baseSeconds int
 	maxSeconds  int
 	maxAgeDays  int
+	// workers limita quantas entregas concorrem por tick (só Postgres;
+	// SQLite segue sequencial por causa do lock de escrita). 1 = sequencial.
+	workers int
+	// ordered força entrega sequencial (ordem por next_retry_at) mesmo no
+	// Postgres — para consumidores que exigem ordenação global.
+	ordered bool
+	// httpTimeoutSeconds é o timeout de cada POST do worker (menor que os
+	// 30s do caminho ao vivo) para receptor lento não prender o lote.
+	httpTimeoutSeconds int
 }
+
+// outboxForceConcurrent é seam de teste: permite exercitar o caminho
+// concorrente fora do Postgres (ex.: SQLite em teste, com MaxOpenConns(1)).
+var outboxForceConcurrent = false
 
 func loadOutboxConfig() outboxConfig {
 	cfg := outboxConfig{
-		enabled:     true,
-		pollSeconds: 30,
-		batch:       100,
-		baseSeconds: 60,
-		maxSeconds:  3600,
-		maxAgeDays:  3,
+		enabled:            true,
+		pollSeconds:        30,
+		batch:              100,
+		baseSeconds:        60,
+		maxSeconds:         3600,
+		maxAgeDays:         3,
+		workers:            4,
+		ordered:            false,
+		httpTimeoutSeconds: 20,
 	}
 	if v := os.Getenv("OUTBOX_ENABLED"); v != "" {
 		cfg.enabled = !(strings.ToLower(v) == "false" || v == "0")
@@ -70,6 +86,19 @@ func loadOutboxConfig() outboxConfig {
 	if v := os.Getenv("OUTBOX_MAX_AGE_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 365 {
 			cfg.maxAgeDays = n
+		}
+	}
+	if v := os.Getenv("OUTBOX_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 32 {
+			cfg.workers = n
+		}
+	}
+	if v := os.Getenv("OUTBOX_ORDERED_DELIVERY"); v != "" {
+		cfg.ordered = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := os.Getenv("OUTBOX_HTTP_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 5 && n <= 120 {
+			cfg.httpTimeoutSeconds = n
 		}
 	}
 	return cfg
@@ -202,6 +231,9 @@ func startOutboxWorker(db *sqlx.DB, stopCh <-chan struct{}) {
 	log.Info().
 		Int("poll_seconds", cfg.pollSeconds).
 		Int("batch", cfg.batch).
+		Int("workers", cfg.workers).
+		Bool("ordered", cfg.ordered).
+		Int("http_timeout_seconds", cfg.httpTimeoutSeconds).
 		Int("max_age_days", cfg.maxAgeDays).
 		Msg("Outbox worker iniciado (retry contínuo de webhooks falhados)")
 }
@@ -275,16 +307,56 @@ func outboxCycle(db *sqlx.DB, cfg outboxConfig, stopCh <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
-	for _, it := range items {
-		select {
-		case <-stopCh:
-			log.Warn().Int("restantes", len(items)).Msg("Outbox: shutdown no meio do lote (leases devolvem o resto)")
-			return nil
-		default:
-		}
-		deliverOutboxItem(db, cfg, it)
-	}
+	deliverOutboxBatch(db, cfg, stopCh, items)
 	return nil
+}
+
+// deliverOutboxBatch entrega o lote reclamado. SQLite e modo ordenado:
+// sequencial (ordem por next_retry_at, comportamento histórico). Postgres com
+// workers>1: concorrência limitada — os itens já foram reclamados com lease
+// de 5min (SKIP LOCKED), então cada worker processa itens distintos; o que
+// não chegar a iniciar até o stop mantém o lease e volta no próximo ciclo ou
+// boot. Sem duplicatas: cada item é entregue por exatamente um worker.
+func deliverOutboxBatch(db *sqlx.DB, cfg outboxConfig, stopCh <-chan struct{}, items []outboxItem) {
+	if len(items) == 0 {
+		return
+	}
+	if cfg.workers <= 1 || cfg.ordered || (db.DriverName() != "postgres" && !outboxForceConcurrent) {
+		for _, it := range items {
+			select {
+			case <-stopCh:
+				log.Warn().Int("restantes", len(items)).Msg("Outbox: shutdown no meio do lote (leases devolvem o resto)")
+				return
+			default:
+			}
+			deliverOutboxItem(db, cfg, it)
+		}
+		return
+	}
+	sem := make(chan struct{}, cfg.workers)
+	var wg sync.WaitGroup
+	stopped := false
+	for _, it := range items {
+		if !stopped {
+			select {
+			case <-stopCh:
+				stopped = true
+				log.Warn().Msg("Outbox: shutdown no meio do lote (leases devolvem o resto)")
+			default:
+			}
+		}
+		if stopped {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(item outboxItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			deliverOutboxItem(db, cfg, item)
+		}(it)
+	}
+	wg.Wait()
 }
 
 // purgeOutboxExpired apaga pendências além da retenção (default 3d).
@@ -387,7 +459,7 @@ func deliverOutboxItem(db *sqlx.DB, cfg outboxConfig, it outboxItem) {
 		return
 	}
 
-	if perr := doHookPost(client, targetURL, data, it.UserID); perr != nil {
+	if perr := doHookPostWithTimeout(client, targetURL, data, it.UserID, time.Duration(cfg.httpTimeoutSeconds)*time.Second); perr != nil {
 		failOutboxItem(db, cfg, it, perr.Error())
 		return
 	}

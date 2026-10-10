@@ -54,7 +54,7 @@ var (
 	webhookRetryDelaySeconds = flag.Int("retrydelay", 30, "Delay in seconds between webhook retries")
 	webhookErrorQueueName    = flag.String("errorqueue", "webhook_errors", "RabbitMQ queue name for failed webhooks")
 
-	shutdownTimeoutSeconds = flag.Int("shutdowntimeout", 30, "Max seconds to wait for in-flight webhook/Rabbit deliveries on shutdown")
+	shutdownTimeoutSeconds = flag.Int("shutdowntimeout", 60, "Max seconds to wait for in-flight webhook/Rabbit deliveries on shutdown (keep above the 30s webhook POST timeout)")
 
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
@@ -491,11 +491,11 @@ func startHTTPMode(s *server) {
 		// publishes Rabbit) até o timeout configurado. Sem isso,
 		// mensagens em retry são abortadas no shutdown.
 		waitTimeout := time.Duration(*shutdownTimeoutSeconds) * time.Second
-		log.Info().Dur("timeout", waitTimeout).Msg("Waiting for in-flight webhook/Rabbit deliveries...")
+		log.Info().Dur("timeout", waitTimeout).Int64("inflight", inflightDeliveries.Load()).Msg("Waiting for in-flight webhook/Rabbit deliveries...")
 		if waitBackground(waitTimeout) {
 			log.Info().Msg("All in-flight deliveries completed")
 		} else {
-			log.Warn().Dur("timeout", waitTimeout).Msg("Shutdown timeout reached with deliveries still in flight (failed webhooks were preserved via DLQ/disk spool)")
+			log.Warn().Dur("timeout", waitTimeout).Int64("inflight", inflightDeliveries.Load()).Msg("Shutdown timeout reached with deliveries still in flight (failed webhooks were preserved via DLQ/disk spool)")
 		}
 
 		// Para o worker do outbox (pendências ficam no banco e retomam no boot).
