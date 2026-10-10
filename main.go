@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/store"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/gorilla/mux"
@@ -70,7 +71,9 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.26"
+const version = "1.0.27"
+
+var fallbackWAVersion = store.WAVersionContainer{2, 3000, 1049558099}
 
 func newSafeHTTPClient() *http.Client {
 	return &http.Client{

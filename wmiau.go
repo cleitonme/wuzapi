@@ -406,6 +406,9 @@ func getPlatformTypeEnum(platformType string) *waCompanionReg.DeviceProps_Platfo
 func (s *server) startClient(userID string, textjid string, token string, subscriptions []string) {
 	log.Info().Str("userid", userID).Str("jid", textjid).Msg("Starting websocket connection to Whatsapp")
 
+	resolvedWAVersion := ResolveWAVersion(context.Background())
+	log.Info().Str("userid", userID).Str("wa_version", resolvedWAVersion.String()).Msg("using WA version")
+
 	// Connection retry constants
 	const maxConnectionRetries = 3
 	const connectionRetryBaseWait = 5 * time.Second
