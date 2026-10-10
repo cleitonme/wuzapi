@@ -32,7 +32,6 @@ var supportedEventTypes = []string{
 	"PairSuccess",
 	"PairError",
 	"QR",
-	"QRScannedWithoutMultidevice",
 
 	// Privacy and Settings
 	"PrivacySettings",
@@ -60,9 +59,6 @@ var supportedEventTypes = []string{
 	// Identity
 	"IdentityChange",
 
-	// Erros
-	"CATRefreshError",
-
 	// Newsletter (WhatsApp Channels)
 	"NewsletterJoin",
 	"NewsletterLeave",
@@ -74,19 +70,4 @@ var supportedEventTypes = []string{
 
 	// Special - receives all events
 	"All",
-}
-
-// Map for quick validation
-var eventTypeMap map[string]bool
-
-func init() {
-	eventTypeMap = make(map[string]bool)
-	for _, eventType := range supportedEventTypes {
-		eventTypeMap[eventType] = true
-	}
-}
-
-// Auxiliary function to validate event type
-func isValidEventType(eventType string) bool {
-	return eventTypeMap[eventType]
 }

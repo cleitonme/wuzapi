@@ -62,12 +62,6 @@ func webhookSemaFor(userID string) chan struct{} {
 	return sema
 }
 
-func webhookAcquire(userID string) func() {
-	sema := webhookSemaFor(userID)
-	sema <- struct{}{}
-	return func() { <-sema }
-}
-
 // webhookAcquireTimeoutSeconds limita quanto tempo uma entrega aguarda vaga no
 // semáforo do usuário. Sem timeout, um outage do receptor preenche os 20 slots
 // (cada retry dorme minutos) e as entregas seguintes travam para sempre —
@@ -114,13 +108,12 @@ func shedToDLQ(webhookurl string, data map[string]string, userID, reason string)
 
 // db field declaration as *sqlx.DB
 type MyClient struct {
-	WAClient       *whatsmeow.Client
-	eventHandlerID uint32
-	userID         string
-	token          string
-	subscriptions  []string
-	db             *sqlx.DB
-	s              *server
+	WAClient      *whatsmeow.Client
+	userID        string
+	token         string
+	subscriptions []string
+	db            *sqlx.DB
+	s             *server
 }
 
 func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID string, token string) {
@@ -466,8 +459,8 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 	store.DeviceProps.PlatformType = getPlatformTypeEnum(*platformType)
 	store.DeviceProps.Os = osName
 
-	mycli := MyClient{client, 1, userID, token, subscriptions, s.db, s}
-	mycli.eventHandlerID = mycli.WAClient.AddEventHandler(mycli.myEventHandler)
+	mycli := MyClient{client, userID, token, subscriptions, s.db, s}
+	mycli.WAClient.AddEventHandler(mycli.myEventHandler)
 
 	// Store the MyClient in clientManager
 	clientManager.SetMyClient(userID, &mycli)

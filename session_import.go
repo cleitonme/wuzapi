@@ -406,16 +406,3 @@ func validateCredentials(creds *SessionCredentials) error {
 	}
 	return nil
 }
-
-// Respond is already defined in handlers.go – don't redefine here.
-// The helpers below convert slices to the standard API response format.
-func bytesToBufferJSON(b []byte) map[string]interface{} {
-	if len(b) == 0 {
-		return map[string]interface{}{"type": "Buffer", "data": []byte{}}
-	}
-	data := make([]int, len(b))
-	for i, v := range b {
-		data[i] = int(v)
-	}
-	return map[string]interface{}{"type": "Buffer", "data": data}
-}

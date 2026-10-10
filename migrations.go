@@ -910,56 +910,6 @@ func createTableIfNotExistsSQLite(tx *sqlx.Tx, tableName, createSQL string) erro
 	return nil
 }
 
-func sqliteChangeIDType(tx *sqlx.Tx) error {
-	var tableInfo string
-	err := tx.Get(&tableInfo, `
-        SELECT sql FROM sqlite_master
-        WHERE type='table' AND name='users'`)
-	if err != nil {
-		return fmt.Errorf("failed to get table info: %w", err)
-	}
-
-	newTableSQL := strings.Replace(tableInfo,
-		"CREATE TABLE users (",
-		"CREATE TABLE users_new (id TEXT PRIMARY KEY, ", 1)
-	newTableSQL = strings.Replace(newTableSQL,
-		"id INTEGER PRIMARY KEY AUTOINCREMENT,", "", 1)
-
-	if _, err = tx.Exec(newTableSQL); err != nil {
-		return fmt.Errorf("failed to create new table: %w", err)
-	}
-
-	columns, err := getTableColumns(tx, "users")
-	if err != nil {
-		return fmt.Errorf("failed to get table columns: %w", err)
-	}
-
-	var filteredColumns []string
-	for _, col := range columns {
-		if col != "id" {
-			filteredColumns = append(filteredColumns, col)
-		}
-	}
-
-	columnList := strings.Join(filteredColumns, ", ")
-	if _, err = tx.Exec(fmt.Sprintf(`
-        INSERT INTO users_new (id, %s)
-        SELECT gen_random_uuid(), %s FROM users`,
-		columnList, columnList)); err != nil {
-		return fmt.Errorf("failed to copy data: %w", err)
-	}
-
-	if _, err = tx.Exec("DROP TABLE users"); err != nil {
-		return fmt.Errorf("failed to drop old table: %w", err)
-	}
-
-	if _, err = tx.Exec("ALTER TABLE users_new RENAME TO users"); err != nil {
-		return fmt.Errorf("failed to rename table: %w", err)
-	}
-
-	return nil
-}
-
 func getTableColumns(tx *sqlx.Tx, tableName string) ([]string, error) {
 	var columns []string
 	rows, err := tx.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))

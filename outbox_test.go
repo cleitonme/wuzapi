@@ -102,14 +102,24 @@ func TestEnqueueOutboxPersists(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 	var it outboxItem
-	if err := db.Get(&it, `SELECT * FROM webhook_outbox LIMIT 1`); err != nil {
+	if err := db.Get(&it, `SELECT id, user_id, event_type, payload, attempts FROM webhook_outbox LIMIT 1`); err != nil {
 		t.Fatalf("select: %v", err)
 	}
-	if it.UserID != "u1" || it.EventType != "Message" || it.MessageID != "m1" {
-		t.Errorf("meta = %+v, want user u1 / Message / m1", it)
+	if it.UserID != "u1" || it.EventType != "Message" {
+		t.Errorf("meta = %+v, want user u1 / Message", it)
 	}
-	if it.Attempts != 0 || it.LastError != "boom" {
-		t.Errorf("attempts/lastError = %d/%q", it.Attempts, it.LastError)
+	if it.Attempts != 0 {
+		t.Errorf("attempts = %d, want 0", it.Attempts)
+	}
+	var messageID, lastError string
+	if err := db.Get(&messageID, `SELECT message_id FROM webhook_outbox LIMIT 1`); err != nil {
+		t.Fatalf("select message_id: %v", err)
+	}
+	if err := db.Get(&lastError, `SELECT last_error FROM webhook_outbox LIMIT 1`); err != nil {
+		t.Fatalf("select last_error: %v", err)
+	}
+	if messageID != "m1" || lastError != "boom" {
+		t.Errorf("message_id/last_error = %q/%q, want m1/boom", messageID, lastError)
 	}
 }
 

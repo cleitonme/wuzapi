@@ -14,7 +14,6 @@ package main
 //  3. Mídia vai inline no payload como no webhook normal.
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -89,17 +88,11 @@ func outboxBackoff(baseSeconds, maxSeconds, attempts int) time.Duration {
 }
 
 type outboxItem struct {
-	ID         int64        `db:"id"`
-	UserID     string       `db:"user_id"`
-	WebhookURL string       `db:"webhook_url"`
-	EventType  string       `db:"event_type"`
-	MessageID  string       `db:"message_id"`
-	Payload    string       `db:"payload"`
-	Attempts   int          `db:"attempts"`
-	NextRetry  time.Time    `db:"next_retry_at"`
-	ClaimedAt  sql.NullTime `db:"claimed_at"`
-	LastError  string       `db:"last_error"`
-	CreatedAt  time.Time    `db:"created_at"`
+	ID        int64  `db:"id"`
+	UserID    string `db:"user_id"`
+	EventType string `db:"event_type"`
+	Payload   string `db:"payload"`
+	Attempts  int    `db:"attempts"`
 }
 
 // extractOutboxMeta tira eventType/messageID (melhor esforço, só
@@ -325,16 +318,14 @@ func claimOutboxDue(db *sqlx.DB, cfg outboxConfig) ([]outboxItem, error) {
 				LIMIT $1
 				FOR UPDATE SKIP LOCKED
 			)
-			RETURNING id, user_id, webhook_url, event_type, message_id, payload,
-				attempts, next_retry_at, claimed_at, last_error, created_at`
+		RETURNING id, user_id, event_type, payload, attempts`
 		if err := db.Select(&items, q, cfg.batch); err != nil {
 			return nil, fmt.Errorf("claim postgres: %w", err)
 		}
 		return items, nil
 	}
 	// SQLite: SELECT + UPDATE otimista (processo único).
-	q := db.Rebind(`SELECT id, user_id, webhook_url, event_type, message_id, payload,
-		attempts, next_retry_at, claimed_at, last_error, created_at
+	q := db.Rebind(`SELECT id, user_id, event_type, payload, attempts
 		FROM webhook_outbox
 		WHERE next_retry_at <= ? AND (claimed_at IS NULL OR claimed_at < ?)
 		ORDER BY next_retry_at ASC LIMIT ?`)
