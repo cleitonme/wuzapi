@@ -17,9 +17,10 @@ package main
 //  3. Quando um events.Message chega com UnavailableRequestID preenchido
 //     (ou com o mesmo ID da mensagem original), markUnavailableRecovered
 //     cancela os timers restantes.
-//  4. Esgotadas as tentativas (ou TTL), o pendente é descartado.
+//  4. Esgotadas as tentativas (ou TTL), o pendente é descartado com log.Error
+//     rico para rastreio posterior (gave_up).
 // O consumidor recebe apenas o UndecryptableMessage original; o resultado
-// do retry aparece só nos logs (INFO recupera/envia, WARN desiste).
+// do retry aparece só nos logs (INFO recupera/envia, ERROR desiste).
 
 import (
 	"context"
@@ -31,6 +32,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 )
 
 const (
@@ -69,12 +71,25 @@ type undecryptablePending struct {
 	sender types.JID
 	msgID  string
 
-	mu         sync.Mutex
-	timers     []*time.Timer
-	attempts   int
-	requestIDs []string
-	done       atomic.Bool
-	firstSeen  time.Time
+	// Contexto capturado do events.UndecryptableMessage para rastreio no gave_up.
+	unavailableType string
+	decryptFailMode string
+	isGroup         bool
+	isFromMe        bool
+	isUnavailable   bool
+	msgTimestamp    time.Time
+	msgType         string
+	pushName        string
+	sourceStr       string
+
+	mu            sync.Mutex
+	timers        []*time.Timer
+	attempts      int
+	requestIDs    []string
+	done          atomic.Bool
+	firstSeen     time.Time
+	lastAttemptAt time.Time
+	lastError     string
 }
 
 var (
@@ -103,16 +118,23 @@ func sendUnavailableMessageRequest(client *whatsmeow.Client, chatJID, senderJID 
 
 // scheduleUnavailableAutoRetry agenda os pedidos peer para uma mensagem
 // indecifrável. Não-bloqueante: nunca dorme na goroutine do chamador.
-func scheduleUnavailableAutoRetry(mycli *MyClient, chat, sender types.JID, msgID, unavailableType string) {
-	if mycli == nil || msgID == "" {
+// Recebe o evento completo para preservar o máximo de contexto para o
+// log.Error de gave_up (rastreio posterior).
+func scheduleUnavailableAutoRetry(mycli *MyClient, evt *events.UndecryptableMessage) {
+	if mycli == nil || evt == nil || evt.Info.ID == "" {
 		return
 	}
+	msgID := string(evt.Info.ID)
+	unavailableType := string(evt.UnavailableType)
 	// view_once é intencionalmente indisponível: reenvio não vai ajudar.
 	if unavailableType == "view_once" {
 		undecryptableStats.skipped.Add(1)
 		log.Debug().
 			Str("userID", mycli.userID).
 			Str("messageID", msgID).
+			Str("chat", evt.Info.Chat.String()).
+			Str("sender", evt.Info.Sender.String()).
+			Str("unavailableType", unavailableType).
 			Msg("Auto-retry ignorado: mensagem view_once intencionalmente indisponível")
 		return
 	}
@@ -138,11 +160,20 @@ func scheduleUnavailableAutoRetry(mycli *MyClient, chat, sender types.JID, msgID
 	undecMu.Unlock()
 
 	entry := &undecryptablePending{
-		userID:    userID,
-		chat:      chat,
-		sender:    sender,
-		msgID:     msgID,
-		firstSeen: time.Now(),
+		userID:          userID,
+		chat:            evt.Info.Chat,
+		sender:          evt.Info.Sender,
+		msgID:           msgID,
+		unavailableType: unavailableType,
+		decryptFailMode: string(evt.DecryptFailMode),
+		isGroup:         evt.Info.IsGroup,
+		isFromMe:        evt.Info.IsFromMe,
+		isUnavailable:   evt.IsUnavailable,
+		msgTimestamp:    evt.Info.Timestamp,
+		msgType:         evt.Info.Type,
+		pushName:        evt.Info.PushName,
+		sourceStr:       evt.Info.SourceString(),
+		firstSeen:       time.Now(),
 	}
 	undecPending.Store(key, entry)
 	undecryptableStats.total.Add(1)
@@ -188,22 +219,47 @@ func undecDoAttempt(key string, attempt int) {
 
 	client := clientManager.GetWhatsmeowClient(entry.userID)
 	if client == nil {
+		entry.mu.Lock()
+		entry.lastAttemptAt = time.Now()
+		entry.lastError = "session_disconnected"
+		entry.mu.Unlock()
 		log.Warn().
 			Str("userID", entry.userID).
 			Str("messageID", entry.msgID).
+			Str("chat", entry.chat.String()).
+			Str("sender", entry.sender.String()).
+			Bool("isGroup", entry.isGroup).
+			Str("unavailableType", entry.unavailableType).
+			Str("decryptFailMode", entry.decryptFailMode).
 			Int("attempt", attempt+1).
+			Int("maxAttempts", undecryptableAutoRetryMaxAttempts).
 			Msg("Auto-retry adiado: sessão desconectada (mantém agendamento)")
 		return
 	}
 
 	resp, err := sendUnavailableMessageRequest(client, entry.chat, entry.sender, entry.msgID, undecryptableRequestTimeout)
 	if err != nil {
+		entry.mu.Lock()
+		entry.lastAttemptAt = time.Now()
+		entry.lastError = err.Error()
+		entry.mu.Unlock()
 		log.Warn().
 			Err(err).
 			Str("userID", entry.userID).
 			Str("messageID", entry.msgID).
+			Str("chat", entry.chat.String()).
+			Str("sender", entry.sender.String()).
+			Bool("isGroup", entry.isGroup).
+			Str("unavailableType", entry.unavailableType).
+			Str("decryptFailMode", entry.decryptFailMode).
 			Int("attempt", attempt+1).
+			Int("maxAttempts", undecryptableAutoRetryMaxAttempts).
 			Msg("Pedido peer automático falhou")
+		// Se foi a última tentativa agendada, registra Error imediato para
+		// rastreio (o TTL ainda fará o gave_up final).
+		if attempt+1 >= undecryptableAutoRetryMaxAttempts {
+			undecLogGiveUpError(entry, "attempts_exhausted", false)
+		}
 		return
 	}
 
@@ -215,6 +271,8 @@ func undecDoAttempt(key string, attempt int) {
 	entry.mu.Lock()
 	entry.attempts++
 	entry.requestIDs = append(entry.requestIDs, requestID)
+	entry.lastAttemptAt = time.Now()
+	entry.lastError = ""
 	entry.mu.Unlock()
 	undecReqIndex.Store(requestID, key)
 	undecryptableStats.retrySent.Add(1)
@@ -222,8 +280,14 @@ func undecDoAttempt(key string, attempt int) {
 	log.Info().
 		Str("userID", entry.userID).
 		Str("messageID", entry.msgID).
+		Str("chat", entry.chat.String()).
+		Str("sender", entry.sender.String()).
+		Bool("isGroup", entry.isGroup).
+		Str("unavailableType", entry.unavailableType).
+		Str("decryptFailMode", entry.decryptFailMode).
 		Str("requestID", requestID).
 		Int("attempt", attempt+1).
+		Int("maxAttempts", undecryptableAutoRetryMaxAttempts).
 		Msg("Pedido peer automático enviado")
 }
 
@@ -279,9 +343,71 @@ func undecResolve(key, reason string) {
 	log.Info().
 		Str("userID", entry.userID).
 		Str("messageID", entry.msgID).
+		Str("chat", entry.chat.String()).
+		Str("sender", entry.sender.String()).
+		Bool("isGroup", entry.isGroup).
+		Str("unavailableType", entry.unavailableType).
+		Str("decryptFailMode", entry.decryptFailMode).
 		Str("reason", reason).
 		Int("attempts", attempts).
+		Strs("requestIDs", reqIDs).
+		Dur("elapsed", time.Since(entry.firstSeen)).
 		Msg("Mensagem indecifrável recuperada")
+}
+
+// undecLogGiveUpError emite o log.Error rastreável de mensagem não
+// recuperada com o máximo de informações. Se countStats for true, incrementa
+// o contador gaveUp (caminho final via TTL). Se false, é apenas o sinal
+// antecipado de tentativas esgotadas (o TTL ainda fará o gave_up final).
+func undecLogGiveUpError(entry *undecryptablePending, reason string, countStats bool) {
+	entry.mu.Lock()
+	reqIDs := append([]string(nil), entry.requestIDs...)
+	attempts := entry.attempts
+	lastErr := entry.lastError
+	lastAttempt := entry.lastAttemptAt
+	entry.mu.Unlock()
+
+	undecMu.Lock()
+	pendingForUser := undecPerUser[entry.userID]
+	undecMu.Unlock()
+
+	ev := log.Error().
+		Str("userID", entry.userID).
+		Str("key", undecPendingKey(entry.userID, entry.msgID)).
+		Str("messageID", entry.msgID).
+		Str("chat", entry.chat.String()).
+		Str("sender", entry.sender.String()).
+		Str("source", entry.sourceStr).
+		Bool("isGroup", entry.isGroup).
+		Bool("isFromMe", entry.isFromMe).
+		Bool("isUnavailable", entry.isUnavailable).
+		Str("unavailableType", entry.unavailableType).
+		Str("decryptFailMode", entry.decryptFailMode).
+		Str("msgType", entry.msgType).
+		Str("pushName", entry.pushName).
+		Time("msgTimestamp", entry.msgTimestamp).
+		Time("firstSeen", entry.firstSeen).
+		Dur("elapsed", time.Since(entry.firstSeen)).
+		Int("attempts", attempts).
+		Int("maxAttempts", undecryptableAutoRetryMaxAttempts).
+		Strs("requestIDs", reqIDs).
+		Time("lastAttemptAt", lastAttempt).
+		Str("lastError", lastErr).
+		Str("reason", reason).
+		Int("pendingForUser", pendingForUser).
+		Uint64("stat_total", undecryptableStats.total.Load()).
+		Uint64("stat_retrySent", undecryptableStats.retrySent.Load()).
+		Uint64("stat_recovered", undecryptableStats.recovered.Load()).
+		Uint64("stat_gaveUp", undecryptableStats.gaveUp.Load()).
+		Uint64("stat_skipped", undecryptableStats.skipped.Load())
+	if lastErr != "" {
+		ev = ev.Str("error", lastErr)
+	}
+	if countStats {
+		ev.Msg("undecryptable.gave_up: mensagem indecifrável não recuperada após auto-retry")
+	} else {
+		ev.Msg("undecryptable.attempts_exhausted: última tentativa de auto-retry falhou")
+	}
 }
 
 // undecGiveUp encerra um pendente sem recuperação (tentativas esgotadas/TTL).
@@ -298,7 +424,6 @@ func undecGiveUp(key, reason string) {
 	timers := entry.timers
 	entry.timers = nil
 	reqIDs := append([]string(nil), entry.requestIDs...)
-	attempts := entry.attempts
 	entry.mu.Unlock()
 	for _, t := range timers {
 		t.Stop()
@@ -314,10 +439,5 @@ func undecGiveUp(key, reason string) {
 	undecMu.Unlock()
 	undecryptableStats.gaveUp.Add(1)
 
-	log.Warn().
-		Str("userID", entry.userID).
-		Str("messageID", entry.msgID).
-		Str("reason", reason).
-		Int("attempts", attempts).
-		Msg("Mensagem indecifrável não recuperada após auto-retry")
+	undecLogGiveUpError(entry, reason, true)
 }

@@ -1613,12 +1613,20 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postmap["unavailableType"] = string(evt.UnavailableType)
 		postmap["decryptFailMode"] = string(evt.DecryptFailMode)
 		log.Warn().
+			Str("userID", mycli.userID).
 			Str("info", evt.Info.SourceString()).
-			Str("messageID", evt.Info.ID).
+			Str("messageID", string(evt.Info.ID)).
+			Str("chat", evt.Info.Chat.String()).
+			Str("sender", evt.Info.Sender.String()).
+			Bool("isGroup", evt.Info.IsGroup).
+			Bool("isFromMe", evt.Info.IsFromMe).
 			Bool("isUnavailable", evt.IsUnavailable).
 			Str("unavailableType", string(evt.UnavailableType)).
+			Str("decryptFailMode", string(evt.DecryptFailMode)).
+			Str("msgType", evt.Info.Type).
+			Time("msgTimestamp", evt.Info.Timestamp).
 			Msg("Undecryptable message received, scheduling peer auto-retry")
-		scheduleUnavailableAutoRetry(mycli, evt.Info.Chat, evt.Info.Sender, evt.Info.ID, string(evt.UnavailableType))
+		scheduleUnavailableAutoRetry(mycli, evt)
 	case *events.MediaRetry:
 		postmap["type"] = "MediaRetry"
 		dowebhook = 1
