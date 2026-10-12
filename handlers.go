@@ -1672,10 +1672,6 @@ func (s *server) SendImage() http.HandlerFunc {
 		}
 
 		thumbnailBytes = thumbBuf.Bytes()
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to read %s: %v", err)))
-			return
-		}
 
 		msg := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
 			Caption:    proto.String(t.Caption),

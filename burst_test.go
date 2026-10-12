@@ -241,6 +241,54 @@ func TestShutdownTimeoutDefault(t *testing.T) {
 	}
 }
 
+// TestSplitIDsChunks: 30 IDs com chunk 10 viram 3 lotes de 10;
+// 7 IDs com chunk 10 viram 1 lote (sem fatiar à toa).
+func TestSplitIDsChunks(t *testing.T) {
+	mk := func(n int) []string {
+		ids := make([]string, n)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("3EB0%04d", i)
+		}
+		return ids
+	}
+	chunks := splitIDs(mk(30), 10)
+	if len(chunks) != 3 {
+		t.Fatalf("lotes = %d, want 3", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) != 10 {
+			t.Fatalf("lote %d len = %d, want 10", i, len(c))
+		}
+	}
+	if got := splitIDs(mk(7), 10); len(got) != 1 || len(got[0]) != 7 {
+		t.Fatalf("7 ids: lotes = %d, want 1x7", len(got))
+	}
+	if got := splitIDs(mk(25), 10); len(got) != 3 || len(got[2]) != 5 {
+		t.Fatalf("25 ids: lotes = %d, want 3 (10,10,5)", len(got))
+	}
+	if got := splitIDs(nil, 10); len(got) != 0 {
+		t.Fatalf("nil: lotes = %d, want 0", len(got))
+	}
+}
+
+// TestReceiptChunkSizeBounds: flag fora de [1,50] cai no default 10.
+func TestReceiptChunkSizeBounds(t *testing.T) {
+	old := *webhookReceiptChunkSize
+	t.Cleanup(func() { *webhookReceiptChunkSize = old })
+	*webhookReceiptChunkSize = 10
+	if got := receiptChunkSize(); got != 10 {
+		t.Errorf("chunk = %d, want 10", got)
+	}
+	*webhookReceiptChunkSize = 0
+	if got := receiptChunkSize(); got != 10 {
+		t.Errorf("chunk inválido: got %d, want default 10", got)
+	}
+	*webhookReceiptChunkSize = 99
+	if got := receiptChunkSize(); got != 10 {
+		t.Errorf("chunk inválido: got %d, want default 10", got)
+	}
+}
+
 // TestInflightGaugeTracks: trackBackground incrementa/decrementa o gauge.
 func TestInflightGaugeTracks(t *testing.T) {
 	before := inflightDeliveries.Load()

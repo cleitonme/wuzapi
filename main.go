@@ -54,6 +54,8 @@ var (
 	webhookRetryCount        = flag.Int("retrycount", 5, "Number of times to retry failed webhooks")
 	webhookRetryDelaySeconds = flag.Int("retrydelay", 30, "Delay in seconds between webhook retries")
 	webhookErrorQueueName    = flag.String("errorqueue", "webhook_errors", "RabbitMQ queue name for failed webhooks")
+	webhookReceiptChunkSize  = flag.Int("receiptchunksize", 10, "Max MessageIDs per ReadReceipt webhook POST (1-50, chunks the rest)")
+	webhookReceiptSkipFromMe = flag.Bool("receiptskipfromme", true, "Skip ReadReceipt webhooks where IsFromMe=true")
 
 	shutdownTimeoutSeconds = flag.Int("shutdowntimeout", 60, "Max seconds to wait for in-flight webhook/Rabbit deliveries on shutdown (keep above the 30s webhook POST timeout)")
 
@@ -228,6 +230,16 @@ func main() {
 	if v := os.Getenv("WEBHOOK_ERROR_QUEUE_NAME"); v != "" {
 		*webhookErrorQueueName = v
 	}
+	if v := os.Getenv("WEBHOOK_RECEIPT_CHUNK_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 50 {
+			*webhookReceiptChunkSize = n
+		} else {
+			log.Warn().Str("value", v).Msg("Invalid WEBHOOK_RECEIPT_CHUNK_SIZE, using default (1-50)")
+		}
+	}
+	if v := os.Getenv("WEBHOOK_RECEIPT_SKIP_FROM_ME"); v != "" {
+		*webhookReceiptSkipFromMe = strings.ToLower(v) == "true" || v == "1"
+	}
 	if v := os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 600 {
 			*shutdownTimeoutSeconds = n
@@ -239,6 +251,8 @@ func main() {
 		Int("count", *webhookRetryCount).
 		Int("delay", *webhookRetryDelaySeconds).
 		Str("queue", *webhookErrorQueueName).
+		Int("receipt_chunk_size", *webhookReceiptChunkSize).
+		Bool("receipt_skip_from_me", *webhookReceiptSkipFromMe).
 		Str("dlq_spool_dir", dlqSpoolDir()).
 		Int("shutdown_timeout", *shutdownTimeoutSeconds).
 		Msg("Webhook Retry Configured")

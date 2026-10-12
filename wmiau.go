@@ -111,6 +111,71 @@ func shedToDLQ(webhookurl string, data map[string]string, userID, reason string)
 	preserveDLQ("data", func() error { return PublishDataErrorToQueue(errPayload) }, userID, errPayload)
 }
 
+// receiptChunkSize resolve o tamanho máximo de MessageIDs por POST de
+// ReadReceipt. Default 10, limites 1-50. Env WEBHOOK_RECEIPT_CHUNK_SIZE ou
+// flag -receiptchunksize têm precedência sobre o default.
+func receiptChunkSize() int {
+	if webhookReceiptChunkSize != nil && *webhookReceiptChunkSize >= 1 && *webhookReceiptChunkSize <= 50 {
+		return *webhookReceiptChunkSize
+	}
+	return 10
+}
+
+// splitIDs fatia ids em lotes de no máximo size (função pura, testável).
+func splitIDs(ids []string, size int) [][]string {
+	if size <= 0 {
+		size = 10
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var chunks [][]string
+	for i := 0; i < len(ids); i += size {
+		end := i + size
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunks = append(chunks, ids[i:end])
+	}
+	return chunks
+}
+
+// sendReceiptChunks envia um ReadReceipt fatiado em N POSTs de até chunkSize
+// IDs. Cada lote leva chunkIndex/chunkTotal/messageCount no top-level para
+// correlação, sem quebrar o contrato (type/state/event.MessageIDs intactos).
+// Evita que um lote de 30 IDs prenda o receptor lento até o timeout de 30s.
+func sendReceiptChunks(mycli *MyClient, basePostmap map[string]interface{}, evt *events.Receipt, state string, chunkSize int) {
+	chunks := splitIDs(evt.MessageIDs, chunkSize)
+	if len(chunks) <= 1 {
+		basePostmap["type"] = "ReadReceipt"
+		basePostmap["state"] = state
+		sendEventWithWebHook(mycli, basePostmap, "")
+		return
+	}
+	for i, ids := range chunks {
+		chunkEvt := *evt
+		chunkEvt.MessageIDs = ids
+		chunkMap := make(map[string]interface{}, len(basePostmap)+4)
+		for k, v := range basePostmap {
+			chunkMap[k] = v
+		}
+		chunkMap["type"] = "ReadReceipt"
+		chunkMap["state"] = state
+		chunkMap["event"] = chunkEvt
+		chunkMap["chunkIndex"] = i + 1
+		chunkMap["chunkTotal"] = len(chunks)
+		chunkMap["messageCount"] = len(ids)
+		log.Info().
+			Str("userID", mycli.userID).
+			Str("chat", evt.Chat.String()).
+			Int("chunk", i+1).
+			Int("total", len(chunks)).
+			Int("count", len(ids)).
+			Msg("ReadReceipt fatiado (evita timeout do receptor)")
+		sendEventWithWebHook(mycli, chunkMap, "")
+	}
+}
+
 // db field declaration as *sqlx.DB
 type MyClient struct {
 	WAClient      *whatsmeow.Client
@@ -1123,22 +1188,45 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				Msg("ReadReceipt de grupo ignorado")
 			return
 		}
+		// Filtro opcional de IsFromMe (ZapFluxo ignora de qualquer forma).
+		// Default false para não quebrar outros consumidores que usam ReadSelf.
+		if webhookReceiptSkipFromMe != nil && *webhookReceiptSkipFromMe && evt.IsFromMe {
+			log.Debug().
+				Str("chat", evt.Chat.String()).
+				Int("count", len(evt.MessageIDs)).
+				Msg("ReadReceipt IsFromMe ignorado (receiptskipfromme)")
+			return
+		}
 
-		postmap["type"] = "ReadReceipt"
-		dowebhook = 1
+		var receiptState string
 		if evt.Type == types.ReceiptTypeRead || evt.Type == types.ReceiptTypeReadSelf {
 			log.Info().Strs("id", evt.MessageIDs).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%v", evt.Timestamp)).Msg("Message was read")
 			if evt.Type == types.ReceiptTypeRead {
-				postmap["state"] = "Read"
+				receiptState = "Read"
 			} else {
-				postmap["state"] = "ReadSelf"
+				receiptState = "ReadSelf"
 			}
 		} else if evt.Type == types.ReceiptTypeDelivered {
-			postmap["state"] = "Delivered"
-			log.Info().Str("id", evt.MessageIDs[0]).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%v", evt.Timestamp)).Msg("Message delivered")
+			if len(evt.MessageIDs) > 0 {
+				log.Info().Str("id", evt.MessageIDs[0]).Str("source", evt.SourceString()).Str("timestamp", fmt.Sprintf("%v", evt.Timestamp)).Msg("Message delivered")
+			} else {
+				log.Info().Str("source", evt.SourceString()).Msg("Message delivered (sem IDs)")
+			}
+			receiptState = "Delivered"
 		} else {
 			return
 		}
+
+		// Chunking: lotes grandes (ex: 30 IDs) travavam o receptor, que faz
+		// update por ID antes do res 200 e estourava os 30s do resty.
+		// Fatiar em N POSTs pequenos resolve sem aumentar timeout.
+		if len(evt.MessageIDs) > receiptChunkSize() {
+			sendReceiptChunks(mycli, postmap, evt, receiptState, receiptChunkSize())
+			return
+		}
+		postmap["type"] = "ReadReceipt"
+		postmap["state"] = receiptState
+		dowebhook = 1
 	case *events.Presence:
 		postmap["type"] = "Presence"
 		dowebhook = 1
