@@ -900,13 +900,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			Bool("isGroup", evt.Info.IsGroup).
 			Bool("isFromMe", evt.Info.IsFromMe).
 			Msg("RAW Message recebida")
-		// Ignorar status newsletters
+		// Ignorar status/broadcast e newsletters: recovery só vale para mensagem normal (privado/grupo).
 		chatStr := evt.Info.Chat.String()
-		if strings.Contains(chatStr, "@newsletter") {
+		if strings.Contains(chatStr, "@newsletter") || evt.Info.Chat.Server == types.BroadcastServer || chatStr == "status@broadcast" {
 			log.Debug().
 				Str("chat", chatStr).
 				Str("id", evt.Info.ID).
-				Msg("Message ignorada (newsletter)")
+				Msg("Message ignorada (status/broadcast/newsletter, sem recovery)")
 			return
 		}
 

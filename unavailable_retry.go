@@ -220,7 +220,7 @@ func undecDoAttempt(key string, attempt int) {
 	}
 	// Defesa: pendente antigo de status@broadcast nunca deve gerar SendMessage.
 	if entry.chat.Server == types.BroadcastServer {
-		undecResolve(key, "status-broadcast-skipped")
+		undecDropSkipped(key, "status-broadcast-skipped")
 		return
 	}
 
@@ -371,6 +371,44 @@ func undecResolve(key, reason string) {
 		Strs("requestIDs", reqIDs).
 		Dur("elapsed", time.Since(entry.firstSeen)).
 		Msg("Mensagem indecifrável recuperada")
+}
+
+// undecDropSkipped descarta pendente sem contar como recovered (ex.: broadcast
+// antigo que escapou do filtro). Só decrementa por-usuário e conta skipped.
+func undecDropSkipped(key, reason string) {
+	v, ok := undecPending.Load(key)
+	if !ok {
+		return
+	}
+	entry := v.(*undecryptablePending)
+	if !entry.done.CompareAndSwap(false, true) {
+		return
+	}
+	entry.mu.Lock()
+	timers := entry.timers
+	entry.timers = nil
+	reqIDs := append([]string(nil), entry.requestIDs...)
+	entry.mu.Unlock()
+	for _, t := range timers {
+		t.Stop()
+	}
+	undecPending.Delete(key)
+	for _, id := range reqIDs {
+		undecReqIndex.Delete(id)
+	}
+	undecMu.Lock()
+	if undecPerUser[entry.userID] > 0 {
+		undecPerUser[entry.userID]--
+	}
+	undecMu.Unlock()
+	undecryptableStats.skipped.Add(1)
+
+	log.Debug().
+		Str("userID", entry.userID).
+		Str("messageID", entry.msgID).
+		Str("chat", entry.chat.String()).
+		Str("reason", reason).
+		Msg("Pendente descartado sem retry (broadcast, sem recovery)")
 }
 
 // undecLogGiveUpError emite o log.Error rastreável de mensagem não
