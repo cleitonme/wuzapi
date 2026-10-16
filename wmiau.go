@@ -1599,6 +1599,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		dowebhook = 1
 		log.Error().Str("reason", fmt.Sprintf("%+v", evt)).Msg("Failed to connect to Whatsapp")
 	case *events.UndecryptableMessage:
+		// status@broadcast (Status/Stories) não é usado: sem webhook e sem retry.
+		if evt.Info.Chat.Server == types.BroadcastServer || evt.Info.Chat.String() == "status@broadcast" {
+			log.Debug().
+				Str("userID", mycli.userID).
+				Str("messageID", string(evt.Info.ID)).
+				Str("chat", evt.Info.Chat.String()).
+				Str("sender", evt.Info.Sender.String()).
+				Msg("UndecryptableMessage ignorada (status@broadcast)")
+			return
+		}
 		postmap["type"] = "UndecryptableMessage"
 		dowebhook = 1
 		// Campos top-level para que o consumidor consiga chamar

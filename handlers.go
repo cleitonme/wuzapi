@@ -6401,6 +6401,12 @@ func (s *server) RequestUnavailableMessage() http.HandlerFunc {
 			return
 		}
 
+		// status@broadcast não é suportado: evita pedido peer para JID especial.
+		if chatJID.Server == types.BroadcastServer {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("status broadcast not supported, retry skipped"))
+			return
+		}
+
 		// Send the request with Peer: true as required by the documentation
 		// (caminho Ãºnico compartilhado com o auto-retry; timeout de 30s preservado).
 		resp, err := sendUnavailableMessageRequest(client, chatJID, senderJID, t.ID, 30*time.Second)

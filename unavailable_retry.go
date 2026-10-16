@@ -126,6 +126,19 @@ func scheduleUnavailableAutoRetry(mycli *MyClient, evt *events.UndecryptableMess
 	}
 	msgID := string(evt.Info.ID)
 	unavailableType := string(evt.UnavailableType)
+	// status@broadcast (Status/Stories) não é usado pelo projeto: ignorar
+	// para evitar pedido peer para JID especial e ERROR gave_up inútil.
+	if evt.Info.Chat.Server == types.BroadcastServer || evt.Info.Chat.String() == "status@broadcast" {
+		undecryptableStats.skipped.Add(1)
+		log.Debug().
+			Str("userID", mycli.userID).
+			Str("messageID", msgID).
+			Str("chat", evt.Info.Chat.String()).
+			Str("sender", evt.Info.Sender.String()).
+			Str("unavailableType", unavailableType).
+			Msg("Auto-retry ignorado: status@broadcast não suportado")
+		return
+	}
 	// view_once é intencionalmente indisponível: reenvio não vai ajudar.
 	if unavailableType == "view_once" {
 		undecryptableStats.skipped.Add(1)
@@ -203,6 +216,11 @@ func undecDoAttempt(key string, attempt int) {
 	}
 	entry := v.(*undecryptablePending)
 	if entry.done.Load() {
+		return
+	}
+	// Defesa: pendente antigo de status@broadcast nunca deve gerar SendMessage.
+	if entry.chat.Server == types.BroadcastServer {
+		undecResolve(key, "status-broadcast-skipped")
 		return
 	}
 
