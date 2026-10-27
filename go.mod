@@ -9,7 +9,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20261017175727-b2b1e71d45e2
+	go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -35,7 +35,7 @@ require (
 	github.com/petermattis/goid v0.0.0-20260918085751-abfca077860b // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
-	github.com/vektah/gqlparser/v2 v2.5.63 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.64 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
