@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/gorilla/mux"
@@ -36,19 +36,21 @@ type server struct {
 
 // Replace the global variables
 var (
-	address             = flag.String("address", "0.0.0.0", "Bind IP Address")
-	port                = flag.String("port", "8080", "Listen Port")
-	waDebug             = flag.String("wadebug", "", "Enable whatsmeow debug (INFO or DEBUG)")
-	logType             = flag.String("logtype", "console", "Type of log output (console or json)")
-	logLevel            = flag.String("loglevel", "error", "Log level (debug, info, warn, error)")
-	osName              = flag.String("osname", "Mac OS 10", "Connection OSName in Whatsapp")
-	platformType        = flag.String("platformtype", "DESKTOP", "Device platform type (DESKTOP, IPAD, ANDROID_TABLET, IOS_PHONE, ANDROID_PHONE, etc.)")
-	colorOutput         = flag.Bool("color", true, "Enable colored output for console logs")
-	sslcert             = flag.String("sslcertificate", "", "SSL Certificate File")
-	sslprivkey          = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
-	adminToken          = flag.String("admintoken", "", "Security Token to authorize admin actions (list/create/remove users)")
-	versionFlag         = flag.Bool("version", false, "Display version information and exit")
-	dataDir             = flag.String("datadir", "", "Data directory for database and session files (defaults to executable directory)")
+	address      = flag.String("address", "0.0.0.0", "Bind IP Address")
+	port         = flag.String("port", "8080", "Listen Port")
+	waDebug      = flag.String("wadebug", "", "Enable whatsmeow debug (INFO or DEBUG)")
+	logType      = flag.String("logtype", "console", "Type of log output (console or json)")
+	logLevel     = flag.String("loglevel", "error", "Log level (debug, info, warn, error)")
+	osName       = flag.String("osname", "Mac OS 10", "Connection OSName in Whatsapp")
+	platformType = flag.String("platformtype", "DESKTOP", "Device platform type (DESKTOP, IPAD, ANDROID_TABLET, IOS_PHONE, ANDROID_PHONE, etc.)")
+	colorOutput  = flag.Bool("color", true, "Enable colored output for console logs")
+	sslcert      = flag.String("sslcertificate", "", "SSL Certificate File")
+	sslprivkey   = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
+	adminToken   = flag.String("admintoken", "", "Security Token to authorize admin actions (list/create/remove users)")
+	versionFlag  = flag.Bool("version", false, "Display version information and exit")
+	dataDir      = flag.String("datadir", "", "Data directory for database and session files (defaults to executable directory)")
+
+	appStateRecoveryEnabled = flag.Bool("appstaterecovery", true, "Recover app state collections that fail to sync (full resync, then a request to the primary device)")
 
 	webhookRetryEnabled      = flag.Bool("webhookretry", true, "Enable webhook retry mechanism")
 	webhookRetryCount        = flag.Int("retrycount", 5, "Number of times to retry failed webhooks")
@@ -137,6 +139,17 @@ func newSafeHTTPClient() *http.Client {
 			},
 		},
 	}
+}
+
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Str("goroutine", name).Err(fmt.Errorf("%v", r)).Msg("Panic in safe goroutine")
+			}
+		}()
+		fn()
+	}()
 }
 
 func isPrivateOrLoopback(ip net.IP) bool {
@@ -338,6 +351,14 @@ func main() {
 			*adminToken = string(b)
 			log.Warn().Str("admin_token", *adminToken).Msg("No admin token provided, generated a random one")
 		}
+	}
+
+	if v := os.Getenv("WUZAPI_APPSTATE_RECOVERY"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Invalid WUZAPI_APPSTATE_RECOVERY value")
+		}
+		*appStateRecoveryEnabled = enabled
 	}
 
 	InitRabbitMQ()

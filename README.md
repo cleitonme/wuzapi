@@ -146,6 +146,22 @@ SESSION_DEVICE_NAME=WuzAPI
 WUZAPI_PORT=8080 # Port for the WuzAPI server
 ```
 
+### App state recovery
+
+WhatsApp syncs chat settings (unread, mute, archive, pin, star, labels) between
+devices as app state collections. When a collection fails verification (for example
+`mismatching LTHash`), it stays broken and writes to it, such as `/chat/unread` or
+`/chat/archive`, fail with `409 conflict`. WuzAPI now repairs it: after a failed
+incremental sync it runs a full resync of that collection (at most once per hour),
+and if a full sync fails it asks the primary phone for a fresh copy of the
+collection (at most once every six hours). The phone only answers while WhatsApp is
+open on it, so writes can keep failing until then. Each step is logged with the user
+ID and collection. Cooldowns are kept in memory per session and reset when a
+recovery completes.
+
+Set `WUZAPI_APPSTATE_RECOVERY=false` or pass `-appstaterecovery=false` to disable it
+(enabled by default). The environment variable overrides the flag.
+
 ### RabbitMQ Integration (DLQ for failed webhooks)
 WuzAPI publishes failed-webhook payloads to a RabbitMQ dead-letter queue, with on-disk spool fallback when the broker is down.
 

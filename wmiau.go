@@ -178,12 +178,13 @@ func sendReceiptChunks(mycli *MyClient, basePostmap map[string]interface{}, evt 
 
 // db field declaration as *sqlx.DB
 type MyClient struct {
-	WAClient      *whatsmeow.Client
-	userID        string
-	token         string
-	subscriptions []string
-	db            *sqlx.DB
-	s             *server
+	WAClient         *whatsmeow.Client
+	userID           string
+	token            string
+	subscriptions    []string
+	db               *sqlx.DB
+	s                *server
+	appStateRecovery *appStateRecovery
 }
 
 func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID string, token string) {
@@ -515,7 +516,15 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 	store.DeviceProps.PlatformType = getPlatformTypeEnum(*platformType)
 	store.DeviceProps.Os = osName
 
-	mycli := MyClient{client, userID, token, subscriptions, s.db, s}
+	mycli := MyClient{
+		WAClient:         client,
+		userID:           userID,
+		token:            token,
+		subscriptions:    subscriptions,
+		db:               s.db,
+		s:                s,
+		appStateRecovery: newAppStateRecovery(userID, client),
+	}
 	mycli.WAClient.AddEventHandler(mycli.myEventHandler)
 
 	// Store the MyClient in clientManager
@@ -756,6 +765,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 	switch evt := rawEvt.(type) {
 	case *events.AppStateSyncComplete:
+		if mycli.appStateRecovery != nil {
+			mycli.appStateRecovery.completed(evt)
+		}
 		if len(mycli.WAClient.Store.PushName) > 0 && evt.Name == appstate.WAPatchCriticalBlock {
 			err := mycli.WAClient.SendPresence(context.Background(), types.PresenceAvailable)
 			if err != nil {
@@ -764,6 +776,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				log.Info().Msg("Marked self as available")
 			}
 		}
+	case *events.AppStateSyncError:
+		if mycli.appStateRecovery == nil {
+			log.Warn().Str("userID", mycli.userID).Str("collection", string(evt.Name)).Bool("fullSync", evt.FullSync).Err(evt.Error).Msg("App state sync failed")
+			break
+		}
+		recovery, ctx := mycli.appStateRecovery, mycli.WAClient.BackgroundEventCtx
+		safeGo("appstate-recovery", func() { recovery.handleError(ctx, evt, time.Now()) })
 	case *events.Connected, *events.PushNameSetting:
 		postmap["type"] = "Connected"
 		dowebhook = 1
@@ -998,29 +1017,29 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			caption := ""
 			replyToMessageID := ""
 
-		// Check for delete messages first
-		if protocolMsg := evt.Message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 0 {
-			messageType = "delete"
-			if protocolMsg.GetKey() != nil {
-				textContent = protocolMsg.GetKey().GetID() // Store the deleted message ID
-			}
-			log.Info().Str("deletedMessageID", textContent).Str("messageID", evt.Info.ID).Msg("Delete message detected")
-		} else if protocolMsg := evt.Message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 14 {
-			// Edição de mensagem (MESSAGE_EDIT): guarda o ID original e o novo texto
-			messageType = "edited"
-			if protocolMsg.GetKey() != nil {
-				replyToMessageID = protocolMsg.GetKey().GetID()
-			}
-			if edited := protocolMsg.GetEditedMessage(); edited != nil {
-				if conv := edited.GetConversation(); conv != "" {
-					textContent = conv
-				} else if ext := edited.GetExtendedTextMessage(); ext != nil {
-					textContent = ext.GetText()
+			// Check for delete messages first
+			if protocolMsg := evt.Message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 0 {
+				messageType = "delete"
+				if protocolMsg.GetKey() != nil {
+					textContent = protocolMsg.GetKey().GetID() // Store the deleted message ID
 				}
-			}
-			log.Info().Str("editedMessageID", replyToMessageID).Str("messageID", evt.Info.ID).Msg("Edited message detected")
-			// Check for reactions
-		} else if reaction := evt.Message.GetReactionMessage(); reaction != nil {
+				log.Info().Str("deletedMessageID", textContent).Str("messageID", evt.Info.ID).Msg("Delete message detected")
+			} else if protocolMsg := evt.Message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 14 {
+				// Edição de mensagem (MESSAGE_EDIT): guarda o ID original e o novo texto
+				messageType = "edited"
+				if protocolMsg.GetKey() != nil {
+					replyToMessageID = protocolMsg.GetKey().GetID()
+				}
+				if edited := protocolMsg.GetEditedMessage(); edited != nil {
+					if conv := edited.GetConversation(); conv != "" {
+						textContent = conv
+					} else if ext := edited.GetExtendedTextMessage(); ext != nil {
+						textContent = ext.GetText()
+					}
+				}
+				log.Info().Str("editedMessageID", replyToMessageID).Str("messageID", evt.Info.ID).Msg("Edited message detected")
+				// Check for reactions
+			} else if reaction := evt.Message.GetReactionMessage(); reaction != nil {
 				messageType = "reaction"
 				replyToMessageID = reaction.GetKey().GetID()
 				textContent = reaction.GetText() // This will be the emoji
@@ -1040,92 +1059,92 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			} else if contact := evt.Message.GetContactMessage(); contact != nil {
 				messageType = "contact"
 				textContent = contact.GetDisplayName()
-		} else if location := evt.Message.GetLocationMessage(); location != nil {
-			messageType = "location"
-			textContent = location.GetName()
-		} else if poll := evt.Message.GetPollCreationMessage(); poll != nil {
-			messageType = "poll"
-			textContent = poll.GetName()
-		} else if vote := evt.Message.GetPollUpdateMessage(); vote != nil {
-			// Voto de enquete: o voto em si é criptografado; guarda o ID da enquete
-			messageType = "poll_vote"
-			if vote.GetPollCreationMessageKey() != nil {
-				replyToMessageID = vote.GetPollCreationMessageKey().GetID()
-			}
-		} else if btn := evt.Message.GetButtonsResponseMessage(); btn != nil {
-			messageType = "button_response"
-			textContent = btn.GetSelectedDisplayText()
-			if textContent == "" {
-				textContent = btn.GetSelectedButtonID()
-			}
-		} else if list := evt.Message.GetListResponseMessage(); list != nil {
-			messageType = "list_response"
-			textContent = list.GetTitle()
-			if reply := list.GetSingleSelectReply(); reply != nil && reply.GetSelectedRowID() != "" {
+			} else if location := evt.Message.GetLocationMessage(); location != nil {
+				messageType = "location"
+				textContent = location.GetName()
+			} else if poll := evt.Message.GetPollCreationMessage(); poll != nil {
+				messageType = "poll"
+				textContent = poll.GetName()
+			} else if vote := evt.Message.GetPollUpdateMessage(); vote != nil {
+				// Voto de enquete: o voto em si é criptografado; guarda o ID da enquete
+				messageType = "poll_vote"
+				if vote.GetPollCreationMessageKey() != nil {
+					replyToMessageID = vote.GetPollCreationMessageKey().GetID()
+				}
+			} else if btn := evt.Message.GetButtonsResponseMessage(); btn != nil {
+				messageType = "button_response"
+				textContent = btn.GetSelectedDisplayText()
 				if textContent == "" {
-					textContent = reply.GetSelectedRowID()
+					textContent = btn.GetSelectedButtonID()
+				}
+			} else if list := evt.Message.GetListResponseMessage(); list != nil {
+				messageType = "list_response"
+				textContent = list.GetTitle()
+				if reply := list.GetSingleSelectReply(); reply != nil && reply.GetSelectedRowID() != "" {
+					if textContent == "" {
+						textContent = reply.GetSelectedRowID()
+					} else {
+						textContent = textContent + " [" + reply.GetSelectedRowID() + "]"
+					}
+				}
+			} else if inter := evt.Message.GetInteractiveResponseMessage(); inter != nil {
+				messageType = "interactive_response"
+				textContent = inter.GetBody().GetText()
+			}
+
+			// Tipos com textContent próprio (não extrair de conversation/extended/caption)
+			isClassifiedType := messageType == "reaction" || messageType == "delete" ||
+				messageType == "edited" || messageType == "poll" || messageType == "poll_vote" ||
+				messageType == "button_response" || messageType == "list_response" ||
+				messageType == "interactive_response"
+
+			// Extract text content for non-reaction and non-delete messages
+			if !isClassifiedType {
+				if conv := evt.Message.GetConversation(); conv != "" {
+					textContent = conv
+				} else if ext := evt.Message.GetExtendedTextMessage(); ext != nil {
+					textContent = ext.GetText()
+					// Check if this is a reply to another message
+					if contextInfo := ext.GetContextInfo(); contextInfo != nil && contextInfo.GetStanzaID() != "" {
+						replyToMessageID = contextInfo.GetStanzaID()
+					}
 				} else {
-					textContent = textContent + " [" + reply.GetSelectedRowID() + "]"
+					textContent = caption
 				}
 			}
-		} else if inter := evt.Message.GetInteractiveResponseMessage(); inter != nil {
-			messageType = "interactive_response"
-			textContent = inter.GetBody().GetText()
-		}
 
-		// Tipos com textContent próprio (não extrair de conversation/extended/caption)
-		isClassifiedType := messageType == "reaction" || messageType == "delete" ||
-			messageType == "edited" || messageType == "poll" || messageType == "poll_vote" ||
-			messageType == "button_response" || messageType == "list_response" ||
-			messageType == "interactive_response"
-
-		// Extract text content for non-reaction and non-delete messages
-		if !isClassifiedType {
-			if conv := evt.Message.GetConversation(); conv != "" {
-				textContent = conv
-			} else if ext := evt.Message.GetExtendedTextMessage(); ext != nil {
-				textContent = ext.GetText()
-				// Check if this is a reply to another message
-				if contextInfo := ext.GetContextInfo(); contextInfo != nil && contextInfo.GetStanzaID() != "" {
-					replyToMessageID = contextInfo.GetStanzaID()
+			// Set default text content when nothing was extracted (also for
+			// classified types that arrived with empty display text)
+			if textContent == "" {
+				switch messageType {
+				case "image":
+					textContent = ":image:"
+				case "video":
+					textContent = ":video:"
+				case "audio":
+					textContent = ":audio:"
+				case "document":
+					textContent = ":document:"
+				case "sticker":
+					textContent = ":sticker:"
+				case "contact":
+					textContent = ":contact:"
+				case "location":
+					textContent = ":location:"
+				case "poll":
+					textContent = ":poll:"
+				case "poll_vote":
+					textContent = ":poll_vote:"
+				case "button_response":
+					textContent = ":button_response:"
+				case "list_response":
+					textContent = ":list_response:"
+				case "interactive_response":
+					textContent = ":interactive_response:"
+				case "edited":
+					textContent = ":edited:"
 				}
-			} else {
-				textContent = caption
 			}
-		}
-
-		// Set default text content when nothing was extracted (also for
-		// classified types that arrived with empty display text)
-		if textContent == "" {
-			switch messageType {
-			case "image":
-				textContent = ":image:"
-			case "video":
-				textContent = ":video:"
-			case "audio":
-				textContent = ":audio:"
-			case "document":
-				textContent = ":document:"
-			case "sticker":
-				textContent = ":sticker:"
-			case "contact":
-				textContent = ":contact:"
-			case "location":
-				textContent = ":location:"
-			case "poll":
-				textContent = ":poll:"
-			case "poll_vote":
-				textContent = ":poll_vote:"
-			case "button_response":
-				textContent = ":button_response:"
-			case "list_response":
-				textContent = ":list_response:"
-			case "interactive_response":
-				textContent = ":interactive_response:"
-			case "edited":
-				textContent = ":edited:"
-			}
-		}
 
 			// Check for replies in regular conversation messages too
 			if messageType == "text" && replyToMessageID == "" {
@@ -1359,75 +1378,75 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							messageType = "document"
 							textContent = doc.GetCaption()
 
-					} else if sticker := message.GetStickerMessage(); sticker != nil {
-						messageType = "sticker"
+						} else if sticker := message.GetStickerMessage(); sticker != nil {
+							messageType = "sticker"
 
-					} else if contact := message.GetContactMessage(); contact != nil {
-						messageType = "contact"
-						textContent = contact.GetDisplayName()
+						} else if contact := message.GetContactMessage(); contact != nil {
+							messageType = "contact"
+							textContent = contact.GetDisplayName()
 
-					} else if location := message.GetLocationMessage(); location != nil {
-						messageType = "location"
-						textContent = location.GetName()
+						} else if location := message.GetLocationMessage(); location != nil {
+							messageType = "location"
+							textContent = location.GetName()
 
-					} else if reaction := message.GetReactionMessage(); reaction != nil {
-						messageType = "reaction"
-						textContent = reaction.GetText()
-						if reaction.GetKey() != nil {
-							quotedMessageID = reaction.GetKey().GetID()
-						}
-
-					} else if protocolMsg := message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 0 {
-						messageType = "delete"
-						if protocolMsg.GetKey() != nil {
-							textContent = protocolMsg.GetKey().GetID()
-						}
-
-					} else if protocolMsg := message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 14 {
-						messageType = "edited"
-						if protocolMsg.GetKey() != nil {
-							quotedMessageID = protocolMsg.GetKey().GetID()
-						}
-						if edited := protocolMsg.GetEditedMessage(); edited != nil {
-							if conv := edited.GetConversation(); conv != "" {
-								textContent = conv
-							} else if ext := edited.GetExtendedTextMessage(); ext != nil {
-								textContent = ext.GetText()
+						} else if reaction := message.GetReactionMessage(); reaction != nil {
+							messageType = "reaction"
+							textContent = reaction.GetText()
+							if reaction.GetKey() != nil {
+								quotedMessageID = reaction.GetKey().GetID()
 							}
-						}
 
-					} else if poll := message.GetPollCreationMessage(); poll != nil {
-						messageType = "poll"
-						textContent = poll.GetName()
+						} else if protocolMsg := message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 0 {
+							messageType = "delete"
+							if protocolMsg.GetKey() != nil {
+								textContent = protocolMsg.GetKey().GetID()
+							}
 
-					} else if vote := message.GetPollUpdateMessage(); vote != nil {
-						messageType = "poll_vote"
-						if vote.GetPollCreationMessageKey() != nil {
-							quotedMessageID = vote.GetPollCreationMessageKey().GetID()
-						}
+						} else if protocolMsg := message.GetProtocolMessage(); protocolMsg != nil && protocolMsg.GetType() == 14 {
+							messageType = "edited"
+							if protocolMsg.GetKey() != nil {
+								quotedMessageID = protocolMsg.GetKey().GetID()
+							}
+							if edited := protocolMsg.GetEditedMessage(); edited != nil {
+								if conv := edited.GetConversation(); conv != "" {
+									textContent = conv
+								} else if ext := edited.GetExtendedTextMessage(); ext != nil {
+									textContent = ext.GetText()
+								}
+							}
 
-					} else if btn := message.GetButtonsResponseMessage(); btn != nil {
-						messageType = "button_response"
-						textContent = btn.GetSelectedDisplayText()
-						if textContent == "" {
-							textContent = btn.GetSelectedButtonID()
-						}
+						} else if poll := message.GetPollCreationMessage(); poll != nil {
+							messageType = "poll"
+							textContent = poll.GetName()
 
-					} else if list := message.GetListResponseMessage(); list != nil {
-						messageType = "list_response"
-						textContent = list.GetTitle()
-						if reply := list.GetSingleSelectReply(); reply != nil && reply.GetSelectedRowID() != "" {
+						} else if vote := message.GetPollUpdateMessage(); vote != nil {
+							messageType = "poll_vote"
+							if vote.GetPollCreationMessageKey() != nil {
+								quotedMessageID = vote.GetPollCreationMessageKey().GetID()
+							}
+
+						} else if btn := message.GetButtonsResponseMessage(); btn != nil {
+							messageType = "button_response"
+							textContent = btn.GetSelectedDisplayText()
 							if textContent == "" {
-								textContent = reply.GetSelectedRowID()
-							} else {
-								textContent = textContent + " [" + reply.GetSelectedRowID() + "]"
+								textContent = btn.GetSelectedButtonID()
 							}
-						}
 
-					} else if inter := message.GetInteractiveResponseMessage(); inter != nil {
-						messageType = "interactive_response"
-						textContent = inter.GetBody().GetText()
-					}
+						} else if list := message.GetListResponseMessage(); list != nil {
+							messageType = "list_response"
+							textContent = list.GetTitle()
+							if reply := list.GetSingleSelectReply(); reply != nil && reply.GetSelectedRowID() != "" {
+								if textContent == "" {
+									textContent = reply.GetSelectedRowID()
+								} else {
+									textContent = textContent + " [" + reply.GetSelectedRowID() + "]"
+								}
+							}
+
+						} else if inter := message.GetInteractiveResponseMessage(); inter != nil {
+							messageType = "interactive_response"
+							textContent = inter.GetBody().GetText()
+						}
 
 						if textContent == "" && messageType != "text" {
 							textContent = ":" + messageType + ":"
