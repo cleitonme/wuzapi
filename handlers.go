@@ -3573,7 +3573,7 @@ func (s *server) GetUser() http.HandlerFunc {
 		if err != nil {
 			msg := fmt.Sprintf("Failed to get user info: %v", err)
 			log.Error().Msg(msg)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4163,7 +4163,7 @@ func (s *server) ListGroups() http.HandlerFunc {
 		if err != nil {
 			msg := fmt.Sprintf("failed to get group list: %v", err)
 			log.Error().Msg(msg)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4217,7 +4217,7 @@ func (s *server) GetGroupInfo() http.HandlerFunc {
 		if err != nil {
 			msg := fmt.Sprintf("Failed to get group info: %v", err)
 			log.Error().Msg(msg)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4280,7 +4280,7 @@ func (s *server) GetGroupInviteLink() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("Failed to get group invite link")
 			msg := fmt.Sprintf("Failed to get group invite link: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4331,7 +4331,7 @@ func (s *server) GroupJoin() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to join group")
 			msg := fmt.Sprintf("failed to join group: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4404,7 +4404,7 @@ func (s *server) CreateGroup() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to create group")
 			msg := fmt.Sprintf("failed to create group: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4456,7 +4456,7 @@ func (s *server) SetGroupLocked() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to set group locked")
 			msg := fmt.Sprintf("failed to set group locked: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4529,7 +4529,7 @@ func (s *server) SetDisappearingTimer() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to set disappearing timer")
 			msg := fmt.Sprintf("failed to set disappearing timer: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4581,7 +4581,7 @@ func (s *server) RemoveGroupPhoto() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to remove group photo")
 			msg := fmt.Sprintf("failed to remove group photo: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4672,7 +4672,7 @@ func (s *server) UpdateGroupParticipants() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to change participant group")
 			msg := fmt.Sprintf("failed to change participant group: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4723,7 +4723,7 @@ func (s *server) GetGroupInviteInfo() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to get group invite info")
 			msg := fmt.Sprintf("failed to get group invite info: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4808,7 +4808,7 @@ func (s *server) SetGroupPhoto() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to set group photo")
 			msg := fmt.Sprintf("failed to set group photo: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4866,7 +4866,7 @@ func (s *server) SetGroupName() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to set group name")
 			msg := fmt.Sprintf("failed to set group name: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4924,7 +4924,7 @@ func (s *server) SetGroupTopic() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to set group topic")
 			msg := fmt.Sprintf("failed to set group topic: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -4976,7 +4976,7 @@ func (s *server) GroupLeave() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to leave group")
 			msg := fmt.Sprintf("failed to leave group: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -5029,7 +5029,7 @@ func (s *server) SetGroupAnnounce() http.HandlerFunc {
 		if err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to set group announce")
 			msg := fmt.Sprintf("failed to set group announce: %v", err)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
@@ -5067,7 +5067,7 @@ func (s *server) ListNewsletter() http.HandlerFunc {
 		if err != nil {
 			msg := fmt.Sprintf("failed to get newsletter list: %v", err)
 			log.Error().Msg(msg)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(msg))
 			return
 		}
 
