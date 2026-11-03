@@ -769,11 +769,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			mycli.appStateRecovery.completed(evt)
 		}
 		if len(mycli.WAClient.Store.PushName) > 0 && evt.Name == appstate.WAPatchCriticalBlock {
-			err := mycli.WAClient.SendPresence(context.Background(), types.PresenceAvailable)
+			err := mycli.WAClient.SendPresence(context.Background(), automaticPresence)
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to send available presence")
+				log.Warn().Err(err).Str("presence", string(automaticPresence)).Msg("Failed to send automatic presence")
 			} else {
-				log.Info().Msg("Marked self as available")
+				log.Info().Str("presence", string(automaticPresence)).Msg("Set automatic presence")
 			}
 		}
 	case *events.AppStateSyncError:
@@ -789,13 +789,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if len(mycli.WAClient.Store.PushName) == 0 {
 			break
 		}
-		// Send presence available when connecting and when the pushname is changed.
-		// This makes sure that outgoing messages always have the right pushname.
-		err := mycli.WAClient.SendPresence(context.Background(), types.PresenceAvailable)
+		err := mycli.WAClient.SendPresence(context.Background(), automaticPresence)
 		if err != nil {
-			log.Warn().Err(err).Msg("Failed to send available presence")
+			log.Warn().Err(err).Str("presence", string(automaticPresence)).Msg("Failed to send automatic presence")
 		} else {
-			log.Info().Msg("Marked self as available")
+			log.Info().Str("presence", string(automaticPresence)).Msg("Set automatic presence")
 		}
 		sqlStmt := `UPDATE users SET connected=1 WHERE id=$1`
 		_, err = mycli.db.Exec(sqlStmt, mycli.userID)

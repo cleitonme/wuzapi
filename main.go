@@ -17,6 +17,7 @@ import (
 
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/gorilla/mux"
@@ -60,6 +61,9 @@ var (
 	webhookReceiptSkipFromMe = flag.Bool("receiptskipfromme", true, "Skip ReadReceipt webhooks where IsFromMe=true")
 
 	shutdownTimeoutSeconds = flag.Int("shutdowntimeout", 60, "Max seconds to wait for in-flight webhook/Rabbit deliveries on shutdown (keep above the 30s webhook POST timeout)")
+
+	autoPresenceMode  = flag.String("autopresence", "available", "Automatic presence after connecting (available or unavailable)")
+	automaticPresence = types.PresenceAvailable
 
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
@@ -162,6 +166,17 @@ func isPrivateOrLoopback(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+func parseAutomaticPresence(value string) (types.Presence, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(types.PresenceAvailable):
+		return types.PresenceAvailable, nil
+	case string(types.PresenceUnavailable):
+		return types.PresenceUnavailable, nil
+	default:
+		return "", fmt.Errorf("invalid automatic presence %q: expected available or unavailable", value)
+	}
 }
 
 func main() {
@@ -279,6 +294,17 @@ func main() {
 	if v := os.Getenv("SESSION_PLATFORM_TYPE"); v != "" {
 		*platformType = v
 	}
+
+	if v := os.Getenv("WUZAPI_AUTO_PRESENCE"); v != "" {
+		*autoPresenceMode = v
+	}
+
+	configuredPresence, err := parseAutomaticPresence(*autoPresenceMode)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid automatic session presence configuration")
+	}
+	automaticPresence = configuredPresence
+	log.Info().Str("presence", string(automaticPresence)).Msg("Automatic session presence configured")
 
 	if *versionFlag {
 		fmt.Printf("WuzAPI version %s\n", version)
