@@ -65,6 +65,8 @@ var (
 	autoPresenceMode  = flag.String("autopresence", "available", "Automatic presence after connecting (available or unavailable)")
 	automaticPresence = types.PresenceAvailable
 
+	socketRecoveryEnabled = flag.Bool("socketrecovery", true, "Recover sessions after closed socket send errors")
+
 	container        *sqlstore.Container
 	clientManager    = NewClientManager()
 	userinfocache    = cache.New(1*time.Hour, 30*time.Minute)
@@ -306,7 +308,15 @@ func main() {
 	automaticPresence = configuredPresence
 	log.Info().Str("presence", string(automaticPresence)).Msg("Automatic session presence configured")
 
-	if *versionFlag {
+  if v := os.Getenv("WUZAPI_SOCKET_RECOVERY"); v != "" {
+	enabled, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid WUZAPI_SOCKET_RECOVERY value")
+	}
+	*socketRecoveryEnabled = enabled
+  }
+
+  if *versionFlag {
 		fmt.Printf("WuzAPI version %s\n", version)
 		os.Exit(0)
 	}
