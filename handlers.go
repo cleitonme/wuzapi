@@ -3000,25 +3000,39 @@ func (s *server) SendMessage() http.HandlerFunc {
 			msgid = t.Id
 		}
 		var (
-			url         string
-			title       string
-			description string
-			imageData   []byte
+			url string
+			og  openGraphResult
 		)
 		if t.LinkPreview {
 			url = extractFirstURL(t.Body)
 			if url != "" {
-				title, description, imageData = getOpenGraphData(r.Context(), url, txtid)
+				og = getOpenGraphData(r.Context(), url, txtid)
 			}
 		}
 		msg := &waE2E.Message{
 			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 				Text:          proto.String(t.Body),
 				MatchedText:   proto.String(url),
-				Title:         proto.String(title),
-				Description:   proto.String(description),
-				JPEGThumbnail: imageData,
+				Title:         proto.String(og.Title),
+				Description:   proto.String(og.Description),
+				JPEGThumbnail: og.ImageData,
 			},
+		}
+
+		if len(og.HQImageData) > 0 {
+			uploaded, upErr := clientManager.GetWhatsmeowClient(txtid).Upload(r.Context(), og.HQImageData, whatsmeow.MediaLinkThumbnail)
+			if upErr != nil {
+				log.Warn().Err(upErr).Str("url", url).Msg("Failed to upload link preview thumbnail, sending inline thumbnail only")
+			} else {
+				etm := msg.ExtendedTextMessage
+				etm.ThumbnailDirectPath = proto.String(uploaded.DirectPath)
+				etm.ThumbnailSHA256 = uploaded.FileSHA256
+				etm.ThumbnailEncSHA256 = uploaded.FileEncSHA256
+				etm.MediaKey = uploaded.MediaKey
+				etm.MediaKeyTimestamp = proto.Int64(time.Now().Unix())
+				etm.ThumbnailWidth = proto.Uint32(og.HQWidth)
+				etm.ThumbnailHeight = proto.Uint32(og.HQHeight)
+			}
 		}
 
 		var qm *waE2E.Message
