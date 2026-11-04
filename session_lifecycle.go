@@ -4,12 +4,32 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 var errSessionActive = errors.New("session is active; disconnect and wait for shutdown first")
+
+var deletingSessionsMu sync.Mutex
+var deletingSessions = make(map[string]bool)
+
+func reserveSessionDeletion(userID string) error {
+	deletingSessionsMu.Lock()
+	defer deletingSessionsMu.Unlock()
+	if deletingSessions[userID] {
+		return errors.New("user deletion is already in progress")
+	}
+	deletingSessions[userID] = true
+	return nil
+}
+
+func releaseSessionDeletion(userID string) {
+	deletingSessionsMu.Lock()
+	delete(deletingSessions, userID)
+	deletingSessionsMu.Unlock()
+}
 
 func sessionContext(kill <-chan bool) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())

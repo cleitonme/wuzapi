@@ -154,6 +154,12 @@ var migrations = []Migration{
     END $$;
     `,
 	},
+	{
+		ID:   15,
+		Name: "add_device_jid",
+		UpSQL: `ALTER TABLE users ADD COLUMN IF NOT EXISTS device_jid TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_device_jid ON users(device_jid) WHERE device_jid <> '';`,
+	},
 }
 
 const changeIDToStringSQL = `
@@ -835,6 +841,15 @@ func applyMigrationWithTx(db *sqlx.DB, migration Migration) error {
                     CREATE INDEX IF NOT EXISTS idx_webhook_outbox_user
                     ON webhook_outbox (user_id)`)
 			}
+		}
+	} else if migration.ID == 15 {
+		if db.DriverName() == "sqlite" {
+			err = addColumnIfNotExistsSQLite(tx, "users", "device_jid", "TEXT NOT NULL DEFAULT ''")
+			if err == nil {
+				_, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_device_jid ON users(device_jid) WHERE device_jid <> ''`)
+			}
+		} else {
+			_, err = tx.Exec(migration.UpSQL)
 		}
 	} else {
 		_, err = tx.Exec(migration.UpSQL)

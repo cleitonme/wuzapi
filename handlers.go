@@ -5554,15 +5554,17 @@ func (s *server) DeleteUser() http.HandlerFunc {
 	}
 }
 
-// Delete user complete
 func (s *server) DeleteUserComplete() http.HandlerFunc {
+	return s.deleteUserInstance(false)
+}
+
+func (s *server) deleteUserInstance(preserveDevices bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		vars := mux.Vars(r)
 		id := vars["id"]
 
-		// Validate ID
 		if id == "" {
 			s.respondWithJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"code":    http.StatusBadRequest,
@@ -5572,7 +5574,6 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			return
 		}
 
-		// Check if user exists
 		var exists bool
 		err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)", id).Scan(&exists)
 		if err != nil {
@@ -5594,26 +5595,49 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			return
 		}
 
-		// Get user info before deletion
 		var uname, jid, token string
 		err = s.db.QueryRow("SELECT name, jid, token FROM users WHERE id = $1", id).Scan(&uname, &jid, &token)
 		if err != nil {
 			log.Error().Err(err).Str("id", id).Msg("problem retrieving user information")
-			// Continue anyway since we have the ID
 		}
 
-		// 1. Logout and disconnect instance
-		clientManager.stopSocketRecovery(id, false)
+		if err := reserveSessionDeletion(id); err != nil {
+			s.respondWithJSON(w, http.StatusConflict, map[string]interface{}{"code": http.StatusConflict, "success": false, "error": err.Error()})
+			return
+		}
+		defer releaseSessionDeletion(id)
+
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
+		clientManager.stopSocketRecovery(id, preserveDevices)
 		if client := clientManager.GetWhatsmeowClient(id); client != nil {
-			if client.IsConnected() {
-				log.Info().Str("id", id).Msg("Logging out user")
-				client.Logout(context.Background())
+			if err := disconnectSessionForDeletion(cleanupCtx, client, preserveDevices); err != nil {
+				log.Warn().Err(err).Str("user_id", id).Msg("Remote logout failed; deleting local credentials")
 			}
 			log.Info().Str("id", id).Msg("Disconnecting from WhatsApp")
-			client.Disconnect()
 		}
 
-		// 2. Remove from DB
+		signalKill(id)
+		if err := waitForSessionStop(cleanupCtx, id); err != nil {
+			s.respondWithJSON(w, http.StatusConflict, map[string]interface{}{"code": http.StatusConflict, "success": false, "error": "session is still stopping; retry deletion"})
+			return
+		}
+		if !preserveDevices {
+			if err := s.deleteSessionDevice(cleanupCtx, id); err != nil {
+				log.Error().Err(err).Str("user_id", id).Msg("Failed to delete persisted device")
+				status := http.StatusInternalServerError
+				response := map[string]interface{}{"code": status, "success": false, "error": "could not safely remove device credentials; user retained"}
+				if errors.Is(err, errAmbiguousSessionDevice) {
+					status = http.StatusConflict
+					response["code"] = status
+					response["error_code"] = "ambiguous_device_ownership"
+				}
+				s.respondWithJSON(w, status, response)
+				return
+			}
+		}
+
 		_, err = s.db.Exec("DELETE FROM users WHERE id = $1", id)
 		if err != nil {
 			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -5625,20 +5649,15 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 			return
 		}
 
-		// 2b. Apaga pendências do outbox do canal (FK cascade cobre no PG;
-		// explícito aqui garante SQLite e resposta imediata).
 		if _, err := s.db.Exec(s.db.Rebind("DELETE FROM webhook_outbox WHERE user_id=?"), id); err != nil {
 			log.Error().Err(err).Str("userID", id).Msg("Failed to delete user outbox")
 		}
 
-		// 3. Cleanup from memory
 		clientManager.DeleteWhatsmeowClient(id)
 		clientManager.DeleteMyClient(id)
 		clientManager.DeleteHTTPClient(id)
 		userinfocache.Delete(token)
-		signalKill(id)
 
-		// 4. Remove media files
 		userDirectory := filepath.Join(s.exPath, "files", id)
 		if stat, err := os.Stat(userDirectory); err == nil && stat.IsDir() {
 			log.Info().Str("dir", userDirectory).Msg("deleting media and history files from disk")
@@ -5650,16 +5669,14 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 
 		log.Info().Str("id", id).Str("name", uname).Str("jid", jid).Msg("user deleted successfully")
 
-		// Success response
+		data := map[string]interface{}{"id": id, "name": uname, "jid": jid}
+		details := "user instance removed completely"
+		if preserveDevices {
+			data["devices_preserved"] = true
+			details = "user instance removed; WhatsApp credentials preserved and devices remain linked to the phone"
+		}
 		s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
-			"code": http.StatusOK,
-			"data": map[string]interface{}{
-				"id":   id,
-				"name": uname,
-				"jid":  jid,
-			},
-			"success": true,
-			"details": "user instance removed completely",
+			"code": http.StatusOK, "data": data, "success": true, "details": details,
 		})
 	}
 }
