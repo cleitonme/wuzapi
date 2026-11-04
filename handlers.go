@@ -309,29 +309,21 @@ func (s *server) Connect() http.HandlerFunc {
 		}
 
 		var subscribedEvents []string
-		if len(t.Subscribe) < 1 {
-			if !Find(subscribedEvents, "") {
-				subscribedEvents = append(subscribedEvents, "")
+		eventstring, changed := resolveConnectEvents(t.Subscribe, r.Context().Value("userinfo").(Values).Get("Events"))
+		if changed {
+			if _, err = s.db.Exec("UPDATE users SET events=$1 WHERE id=$2", eventstring, txtid); err != nil {
+				log.Warn().Msg("Could not set events in users table")
 			}
+			log.Info().Str("events", eventstring).Msg("Setting subscribed events")
+			v := updateUserInfo(r.Context().Value("userinfo"), "Events", eventstring)
+			userinfocache.Set(token, v, cache.NoExpiration)
 		} else {
-			for _, arg := range t.Subscribe {
-				if !Find(supportedEventTypes, arg) {
-					log.Warn().Str("Type", arg).Msg("Event type discarded")
-					continue
-				}
-				if !Find(subscribedEvents, arg) {
-					subscribedEvents = append(subscribedEvents, arg)
-				}
-			}
+			log.Info().Str("events", eventstring).Msg("Preserving existing subscribed events")
 		}
-		eventstring = strings.Join(subscribedEvents, ",")
-		_, err = s.db.Exec("UPDATE users SET events=$1 WHERE id=$2", eventstring, txtid)
-		if err != nil {
-			log.Warn().Msg("Could not set events in users table")
+		subscribedEvents = strings.Split(eventstring, ",")
+		if len(subscribedEvents) == 1 && subscribedEvents[0] == "" {
+			subscribedEvents = []string{}
 		}
-		log.Info().Str("events", eventstring).Msg("Setting subscribed events")
-		v := updateUserInfo(r.Context().Value("userinfo"), "Events", eventstring)
-		userinfocache.Set(token, v, cache.NoExpiration)
 
 		log.Info().Str("jid", jid).Msg("Attempt to connect")
 		killchannel.Create(txtid)
@@ -696,6 +688,9 @@ func (s *server) Logout() http.HandlerFunc {
 					return
 				} else {
 					log.Info().Str("jid", jid).Msg("Logged out")
+					if err := s.setDisconnectedState(txtid, false); err != nil {
+						log.Error().Err(err).Str("user_id", txtid).Msg("Failed to persist logout state")
+					}
 					clientManager.DeleteWhatsmeowClient(txtid)
 					killchannel.Send(txtid)
 				}

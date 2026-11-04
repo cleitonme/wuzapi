@@ -676,35 +676,7 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 		// Already logged in, just connect
 		log.Info().Msg("Already logged in, just connect")
 
-		// Retry logic with linear backoff
-		var lastErr error
-
-		for attempt := 0; attempt < maxConnectionRetries; attempt++ {
-			if attempt > 0 {
-				waitTime := time.Duration(attempt) * connectionRetryBaseWait
-				log.Warn().
-					Int("attempt", attempt+1).
-					Int("max_retries", maxConnectionRetries).
-					Dur("wait_time", waitTime).
-					Msg("Retrying connection after delay")
-				time.Sleep(waitTime)
-			}
-
-			err = client.Connect()
-			if err == nil {
-				log.Info().
-					Int("attempt", attempt+1).
-					Msg("Successfully connected to WhatsApp")
-				break
-			}
-
-			lastErr = err
-			log.Warn().
-				Err(err).
-				Int("attempt", attempt+1).
-				Int("max_retries", maxConnectionRetries).
-				Msg("Failed to connect to WhatsApp")
-		}
+		lastErr := connectSessionWithRetry(context.Background(), client.Connect, maxConnectionRetries, connectionRetryBaseWait)
 
 		if lastErr != nil {
 			log.Error().
@@ -744,9 +716,8 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 			clientManager.DeleteWhatsmeowClient(userID)
 			clientManager.DeleteMyClient(userID)
 			clientManager.DeleteHTTPClient(userID)
-			sqlStmt := `UPDATE users SET qrcode='', connected=0 WHERE id=$1`
-			if _, err := s.db.Exec(sqlStmt, userID); err != nil {
-				log.Error().Err(err).Msg(sqlStmt)
+			if err := s.clearSessionQRCode(userID); err != nil {
+				log.Error().Err(err).Msg("Failed to clear QR code on session shutdown")
 			}
 			killchannel.Delete(userID)
 			return
