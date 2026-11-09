@@ -43,11 +43,11 @@ type chatPresenceSender interface {
 
 type ClientManager struct {
 	sync.RWMutex
-	whatsmeowClients  map[string]*whatsmeow.Client
-	httpClients       map[string]*resty.Client
-	myClients         map[string]*MyClient
-	socketRecoveries  map[string]*socketRecovery
-	pollOptions       map[string]map[string][]string
+	whatsmeowClients map[string]*whatsmeow.Client
+	httpClients      map[string]*resty.Client
+	myClients        map[string]*MyClient
+	socketRecoveries map[string]*socketRecovery
+	pollOptions      map[string]map[string][]string
 }
 
 func NewClientManager() *ClientManager {
@@ -76,6 +76,30 @@ func (cm *ClientManager) GetWhatsmeowClient(userID string) *whatsmeow.Client {
 	return cm.whatsmeowClients[userID]
 }
 
+const qrClientWaitTimeout = 20 * time.Second
+const qrClientPollInterval = 200 * time.Millisecond
+
+// waitForSessionClient aguarda, enquanto a sessão estiver sendo iniciada, até
+// o cliente whatsmeow estar registrado e conectado. Sem isso, uma chamada a
+// /session/qr logo após /session/connect (Immediate=true) responde
+// "no session" antes de startClient registrar o cliente.
+func (s *server) waitForSessionClient(userID string, timeout time.Duration) *whatsmeow.Client {
+	deadline := time.Now().Add(timeout)
+	for {
+		client := clientManager.GetWhatsmeowClient(userID)
+		if client != nil && client.IsConnected() {
+			return client
+		}
+		if _, starting := getKillChannel(userID); !starting {
+			return client
+		}
+		if time.Now().After(deadline) {
+			return client
+		}
+		time.Sleep(qrClientPollInterval)
+	}
+}
+
 func (cm *ClientManager) DeleteWhatsmeowClient(userID string) {
 	cm.Lock()
 	defer cm.Unlock()
@@ -83,6 +107,22 @@ func (cm *ClientManager) DeleteWhatsmeowClient(userID string) {
 		recovery.stop()
 	}
 	delete(cm.whatsmeowClients, userID)
+}
+
+// DeleteWhatsmeowClientIf remove o cliente apenas se ele ainda for o cliente
+// atual do usuário. Evita que uma sessão antiga, encerrando em paralelo a uma
+// reconexão, apague o cliente novo recém-registrado.
+func (cm *ClientManager) DeleteWhatsmeowClientIf(userID string, client *whatsmeow.Client) bool {
+	cm.Lock()
+	defer cm.Unlock()
+	if cm.whatsmeowClients[userID] != client {
+		return false
+	}
+	if recovery := cm.socketRecoveries[userID]; recovery != nil {
+		recovery.stop()
+	}
+	delete(cm.whatsmeowClients, userID)
+	return true
 }
 
 func (cm *ClientManager) SetHTTPClient(userID string, client *resty.Client) {

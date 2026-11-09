@@ -308,6 +308,15 @@ func (s *server) Connect() http.HandlerFunc {
 			}
 		}
 
+		// Rejeita conexões concorrentes. Sem esta reserva, cada chamada inicia
+		// uma nova goroutine/cliente whatsmeow e o canal de kill anterior é
+		// sobrescrito, deixando sessões órfãs gerando QR em paralelo.
+		if _, created := killchannel.CreateIfAbsent(txtid); !created {
+			log.Warn().Str("user_id", txtid).Msg("Connect request rejected because a session is already starting")
+			s.Respond(w, r, http.StatusConflict, errors.New("session is already starting; wait for it to finish"))
+			return
+		}
+
 		var subscribedEvents []string
 		eventstring, changed := resolveConnectEvents(t.Subscribe, r.Context().Value("userinfo").(Values).Get("Events"))
 		if changed {
@@ -326,7 +335,6 @@ func (s *server) Connect() http.HandlerFunc {
 		}
 
 		log.Info().Str("jid", jid).Msg("Attempt to connect")
-		killchannel.Create(txtid)
 		go s.startClient(txtid, jid, token, subscribedEvents)
 
 		if t.Immediate == false {
@@ -622,36 +630,43 @@ func (s *server) GetQR() http.HandlerFunc {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		code := ""
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+		// /session/connect com Immediate=true retorna antes do startClient
+		// registrar o cliente. Aguarda a sessão em início para não responder
+		// "no session" numa simples corrida de inicialização.
+		client := s.waitForSessionClient(txtid, qrClientWaitTimeout)
+		if client == nil {
+			if _, starting := getKillChannel(txtid); starting {
+				s.Respond(w, r, http.StatusRequestTimeout, errors.New("session is still starting; retry shortly"))
+			} else {
+				s.Respond(w, r, http.StatusConflict, errors.New("session not started; call /session/connect first"))
+			}
 			return
-		} else {
-			if clientManager.GetWhatsmeowClient(txtid).IsConnected() == false {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("not connected"))
-				return
-			}
-			rows, err := s.db.Query("SELECT qrcode AS code FROM users WHERE id=$1 LIMIT 1", txtid)
+		}
+		if client.IsConnected() == false {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("not connected"))
+			return
+		}
+		rows, err := s.db.Query("SELECT qrcode AS code FROM users WHERE id=$1 LIMIT 1", txtid)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			err = rows.Scan(&code)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
 				return
 			}
-			defer rows.Close()
-			for rows.Next() {
-				err = rows.Scan(&code)
-				if err != nil {
-					s.Respond(w, r, http.StatusInternalServerError, err)
-					return
-				}
-			}
-			err = rows.Err()
-			if err != nil {
-				s.Respond(w, r, http.StatusInternalServerError, err)
-				return
-			}
-			if clientManager.GetWhatsmeowClient(txtid).IsLoggedIn() == true {
-				s.Respond(w, r, http.StatusInternalServerError, errors.New("already logged in"))
-				return
-			}
+		}
+		err = rows.Err()
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		if client.IsLoggedIn() == true {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("already logged in"))
+			return
 		}
 
 		log.Info().Str("instance", txtid).Str("qrcode", code).Msg("Get QR successful")

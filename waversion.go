@@ -107,6 +107,10 @@ func ResolveWAVersion(ctx context.Context) store.WAVersionContainer {
 	}
 
 	remote := fetchProjectWAVersion(ctx)
+	if ctx.Err() != nil {
+		// Sessão cancelada durante o fetch: não cacheia o fallback por 24h.
+		return fallbackWAVersion
+	}
 	var final store.WAVersionContainer
 	if remote == nil {
 		final = fallbackWAVersion

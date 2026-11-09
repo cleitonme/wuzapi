@@ -15,33 +15,54 @@ var killchannel = &KillChannelManager{
 	channels: make(map[string]chan bool),
 }
 
-var killchannelMu sync.RWMutex
-
+// getKillChannel, deleteKillChannel, setKillChannel e os métodos do
+// KillChannelManager compartilham o mesmo mapa e o mesmo mutex para evitar
+// corrida entre o caminho de conexão e o de encerramento da sessão.
 func getKillChannel(userID string) (chan bool, bool) {
-	killchannelMu.RLock()
-	defer killchannelMu.RUnlock()
+	killchannel.mu.RLock()
+	defer killchannel.mu.RUnlock()
 	ch, ok := killchannel.channels[userID]
 	return ch, ok
 }
 
 func deleteKillChannel(userID string, ch chan bool) {
-	killchannelMu.Lock()
+	killchannel.mu.Lock()
 	if current, ok := killchannel.channels[userID]; ok && current == ch {
 		delete(killchannel.channels, userID)
 	}
-	killchannelMu.Unlock()
+	killchannel.mu.Unlock()
 }
 
 func setKillChannel(userID string, ch chan bool) {
-	killchannelMu.Lock()
+	killchannel.mu.Lock()
 	killchannel.channels[userID] = ch
-	killchannelMu.Unlock()
+	killchannel.mu.Unlock()
 }
 
 func (k *KillChannelManager) Create(id string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.channels[id] = make(chan bool, 1)
+}
+
+// CreateIfAbsent registra um canal apenas se ainda não houver sessão
+// registrada para o usuário. Retorna o canal e se ele foi criado agora.
+func (k *KillChannelManager) CreateIfAbsent(id string) (chan bool, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if ch, ok := k.channels[id]; ok {
+		return ch, false
+	}
+	ch := make(chan bool, 1)
+	k.channels[id] = ch
+	return ch, true
+}
+
+// Ensure devolve o canal já registrado ou cria um novo. Usado no início de
+// startClient para capturar o canal da sessão antes de qualquer retorno.
+func (k *KillChannelManager) Ensure(id string) chan bool {
+	ch, _ := k.CreateIfAbsent(id)
+	return ch
 }
 
 func (k *KillChannelManager) Send(id string) {

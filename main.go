@@ -515,6 +515,11 @@ func main() {
 	}
 	s.routes()
 
+	// Aquece a versão do WhatsApp antes de aceitar conexões. Sem isso, o
+	// primeiro /session/connect pode gastar até ~20s em HTTP antes de registrar
+	// o cliente, fazendo /session/qr responder "no session" nesse intervalo.
+	go ResolveWAVersion(context.Background())
+
 	s.connectOnStartup()
 
 	// Outbox de webhooks: worker de retry contínuo (sweep imediato no boot
