@@ -637,9 +637,62 @@ func (s *server) GetQR() http.HandlerFunc {
 		if client == nil {
 			if _, starting := getKillChannel(txtid); starting {
 				s.Respond(w, r, http.StatusRequestTimeout, errors.New("session is still starting; retry shortly"))
-			} else {
-				s.Respond(w, r, http.StatusConflict, errors.New("session not started; call /session/connect first"))
+				return
 			}
+			// Inicia automaticamente a conexão se não houver sessão ativa
+			log.Info().Str("userid", txtid).Msg("GetQR: no session, starting connection automatically")
+			jid := r.Context().Value("userinfo").(Values).Get("Jid")
+			if jid == "" {
+				err := s.db.QueryRow("SELECT jid FROM users WHERE id=$1", txtid).Scan(&jid)
+				if err != nil && err != sql.ErrNoRows {
+					log.Error().Err(err).Str("userid", txtid).Msg("GetQR: failed to get jid from DB")
+					s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to get user jid"))
+					return
+				}
+			}
+			token := r.Context().Value("userinfo").(Values).Get("Token")
+			events := r.Context().Value("userinfo").(Values).Get("Events")
+			eventstring := events
+			if eventstring == "" {
+				eventstring = ""
+			}
+			subscribedEvents := strings.Split(eventstring, ",")
+			if len(subscribedEvents) == 1 && subscribedEvents[0] == "" {
+				subscribedEvents = []string{}
+			}
+			go s.startClient(txtid, jid, token, subscribedEvents)
+
+			// Aguarda o QR code ser gerado
+			deadline := time.Now().Add(qrClientWaitTimeout)
+			for time.Now().Before(deadline) {
+				err := s.db.QueryRow("SELECT qrcode FROM users WHERE id=$1", txtid).Scan(&code)
+				if err != nil {
+					time.Sleep(qrClientPollInterval)
+					continue
+				}
+				if code != "" {
+					break
+				}
+				if _, starting := getKillChannel(txtid); !starting {
+					break
+				}
+				time.Sleep(qrClientPollInterval)
+			}
+
+			if code == "" {
+				client = s.waitForSessionClient(txtid, qrClientWaitTimeout)
+				if client == nil {
+					s.Respond(w, r, http.StatusRequestTimeout, errors.New("session is starting; retry shortly"))
+					return
+				}
+				if client.IsConnected() && client.IsLoggedIn() {
+					s.Respond(w, r, http.StatusInternalServerError, errors.New("already logged in"))
+					return
+				}
+			}
+		}
+		if client == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("not connected"))
 			return
 		}
 		if client.IsConnected() == false {
@@ -664,9 +717,11 @@ func (s *server) GetQR() http.HandlerFunc {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
 		}
-		if client.IsLoggedIn() == true {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("already logged in"))
-			return
+		if code == "" {
+			if client.IsLoggedIn() == true {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New("already logged in"))
+				return
+			}
 		}
 
 		log.Info().Str("instance", txtid).Str("qrcode", code).Msg("Get QR successful")
