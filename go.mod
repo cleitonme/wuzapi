@@ -9,7 +9,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20261102152715-54038813c47f
+	go.mau.fi/whatsmeow v0.0.0-20261107160454-79dc2a8c33df
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -51,7 +51,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-colorable v0.1.16 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	go.mau.fi/libsignal v0.2.2 // indirect
+	go.mau.fi/libsignal v0.2.3 // indirect
 	go.mau.fi/util v0.11.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.62.0
