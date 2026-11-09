@@ -764,6 +764,28 @@ async function performDelete(id) {
   if(data.success===true) {
     $('#instance-row-' + id).remove();
     showDeleteSuccess();
+  } else if(data.error_code === 'ambiguous_device_ownership') {
+    if(confirm('Multiple WhatsApp devices match this account. Remove the instance but keep the WhatsApp credentials (devices stay linked to the phone)?')) {
+      await performDeletePreservingDevices(id);
+    }
+  } else {
+    showError('Error deleting instance');
+  }
+}
+
+async function performDeletePreservingDevices(id) {
+  const admintoken = getLocalStorageItem('admintoken');
+  const myHeaders = new Headers();
+  myHeaders.append('authorization', admintoken);
+  myHeaders.append('Content-Type', 'application/json');
+  res = await fetch(baseUrl + "/admin/users/"+id+"/preserve-devices", {
+    method: "DELETE",
+    headers: myHeaders
+  });
+  data = await res.json();
+  if(data.success===true) {
+    $('#instance-row-' + id).remove();
+    showDeleteSuccess();
   } else {
     showError('Error deleting instance');
   }

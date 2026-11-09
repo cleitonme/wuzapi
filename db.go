@@ -143,6 +143,52 @@ func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID, mes
 	return nil
 }
 
+// deleteUserAndHistory remove o usuário e os dados dependentes na mesma
+// transação. A ordem (outbox -> history -> users) não depende de FK cascade e
+// funciona igual em SQLite e PostgreSQL.
+func (s *server) deleteUserAndHistory(userID string) (int64, error) {
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	for _, q := range []string{
+		`DELETE FROM webhook_outbox WHERE user_id=?`,
+		`DELETE FROM message_history WHERE user_id=?`,
+	} {
+		if _, err := tx.Exec(tx.Rebind(q), userID); err != nil {
+			if isMissingTableErr(err) {
+				continue
+			}
+			return 0, fmt.Errorf("failed to delete user resources: %w", err)
+		}
+	}
+
+	result, err := tx.Exec(tx.Rebind(`DELETE FROM users WHERE id=?`), userID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete user: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify user deletion: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return affected, nil
+}
+
+// isMissingTableErr detecta tabela ausente (bancos de teste mínimos ou schema
+// parcial) para que a limpeza continue com as demais tabelas.
+func isMissingTableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such table") || strings.Contains(msg, "does not exist")
+}
+
 func (s *server) trimMessageHistory(userID, chatJID string, limit int) error {
 	isPostgres := s.db.DriverName() == "postgres"
 

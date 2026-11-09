@@ -75,6 +75,9 @@ func (s *server) checkDeviceOwner(ctx context.Context, userID, deviceJID string,
 }
 
 func (s *server) resolveDeviceStore(ctx context.Context, userID string) (*store.Device, error) {
+	if container == nil {
+		return nil, errors.New("device store is unavailable")
+	}
 	exact, account, err := s.sessionDeviceIdentity(ctx, userID)
 	if err != nil {
 		return nil, err

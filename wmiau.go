@@ -479,24 +479,16 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 	const maxConnectionRetries = 3
 	const connectionRetryBaseWait = 5 * time.Second
 
-	var deviceStore *store.Device
-	var err error
-
-	// First handle the device store initialization
-	if textjid != "" {
-		jid, _ := parseJID(textjid)
-		deviceStore, err = container.GetDevice(context.Background(), jid)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to get device")
-			deviceStore = container.NewDevice()
-		}
-	} else {
-		log.Warn().Msg("No jid found. Creating new device")
-		deviceStore = container.NewDevice()
+	// Resolve o device persistido a partir do vínculo salvo (device_jid/jid).
+	// Nunca escolhe um device arbitrário quando há ambiguidade: nesse caso a
+	// conexão é recusada para não trocar credenciais de outro usuário.
+	deviceStore, err := s.resolveDeviceStore(context.Background(), userID)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("Cannot resolve session device; refusing to select another device")
+		return
 	}
-
 	if deviceStore == nil {
-		log.Warn().Msg("No store found. Creating new one")
+		log.Warn().Str("user_id", userID).Msg("No store found. Creating new one")
 		deviceStore = container.NewDevice()
 	}
 
@@ -772,11 +764,24 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			log.Error().Err(err).Msg(sqlStmt)
 			return
 		}
+		if mycli.WAClient.Store != nil && mycli.WAClient.Store.ID != nil {
+			connectedJID := mycli.WAClient.Store.ID.ToNonAD().String()
+			deviceJID := mycli.WAClient.Store.ID.String()
+			q := mycli.db.Rebind(`UPDATE users SET jid=?, device_jid=? WHERE id=?`)
+			if _, err := mycli.db.Exec(q, connectedJID, deviceJID, mycli.userID); err != nil {
+				log.Warn().Err(err).Str("user_id", mycli.userID).Msg("Failed to persist JID/device on connect")
+			}
+		}
 	case *events.PairSuccess:
 		log.Info().Str("userid", mycli.userID).Str("token", mycli.token).Str("ID", evt.ID.String()).Str("BusinessName", evt.BusinessName).Str("Platform", evt.Platform).Msg("QR Pair Success")
-		jid := evt.ID
-		sqlStmt := `UPDATE users SET jid=$1 WHERE id=$2`
-		_, err := mycli.db.Exec(sqlStmt, jid, mycli.userID)
+		jidStr := evt.ID.ToNonAD().String()
+		deviceJID := evt.ID.String()
+		if mycli.WAClient.Store != nil && mycli.WAClient.Store.ID != nil {
+			jidStr = mycli.WAClient.Store.ID.ToNonAD().String()
+			deviceJID = mycli.WAClient.Store.ID.String()
+		}
+		sqlStmt := mycli.db.Rebind(`UPDATE users SET jid=?, device_jid=? WHERE id=?`)
+		_, err := mycli.db.Exec(sqlStmt, jidStr, deviceJID, mycli.userID)
 		if err != nil {
 			log.Error().Err(err).Msg(sqlStmt)
 			return
@@ -791,9 +796,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		} else {
 			txtid = myuserinfo.(Values).Get("Id")
 			token := myuserinfo.(Values).Get("Token")
-			v := updateUserInfo(myuserinfo, "Jid", fmt.Sprintf("%s", jid))
+			v := updateUserInfo(myuserinfo, "Jid", jidStr)
 			userinfocache.Set(token, v, cache.NoExpiration)
-			log.Info().Str("jid", jid.String()).Str("userid", txtid).Str("token", token).Msg("User information set")
+			log.Info().Str("jid", jidStr).Str("userid", txtid).Str("token", token).Msg("User information set")
 		}
 
 		// Check if automatic history sync is enabled and trigger it after QR code is scanned
@@ -1554,6 +1559,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			log.Error().Err(err).Msg(sqlStmt)
 			return
 		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := mycli.s.deleteSessionDevice(cleanupCtx, mycli.userID); err != nil {
+			log.Error().Err(err).Str("user_id", mycli.userID).Msg("Failed to remove logged-out device store")
+		} else if _, err := mycli.db.Exec(mycli.db.Rebind(`UPDATE users SET device_jid='' WHERE id=?`), mycli.userID); err != nil {
+			log.Warn().Err(err).Str("user_id", mycli.userID).Msg("Failed to clear device_jid after logout")
+		}
+		cleanupCancel()
 	case *events.ChatPresence:
 		postmap["type"] = "ChatPresence"
 		dowebhook = 1

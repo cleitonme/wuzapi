@@ -512,8 +512,7 @@ func ensureWebhookOutbox(db *sqlx.DB) error {
 				claimed_at DATETIME NULL,
 				last_error TEXT NOT NULL DEFAULT '',
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-			)`);
-			err != nil {
+			)`); err != nil {
 			return fmt.Errorf("ensureWebhookOutbox sqlite table: %w", err)
 		}
 		for _, idx := range []string{
@@ -541,8 +540,7 @@ func ensureWebhookOutbox(db *sqlx.DB) error {
 			claimed_at TIMESTAMP NULL,
 			last_error TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`);
-		err != nil {
+		)`); err != nil {
 		return fmt.Errorf("ensureWebhookOutbox pg table: %w", err)
 	}
 	for _, idx := range []string{
@@ -557,9 +555,38 @@ func ensureWebhookOutbox(db *sqlx.DB) error {
 	if _, err := db.Exec(`
 		ALTER TABLE webhook_outbox
 		ADD CONSTRAINT fk_webhook_outbox_user FOREIGN KEY (user_id)
-		REFERENCES users(id) ON DELETE CASCADE`);
-		err != nil && !isConstraintExistsErr(err) {
+		REFERENCES users(id) ON DELETE CASCADE`); err != nil && !isConstraintExistsErr(err) {
 		return fmt.Errorf("ensureWebhookOutbox pg fk: %w", err)
+	}
+	return nil
+}
+
+// ensureDeviceJID garante a coluna device_jid e o índice único parcial fora do
+// mecanismo de migrations. Cura deployments onde a migration 15 foi marcada
+// aplicada mas a coluna/índice não existem no schema visível (search_path
+// divergente, restore parcial), evitando que a exclusão de usuário falhe ao
+// consultar device_jid.
+func ensureDeviceJID(db *sqlx.DB) error {
+	if db.DriverName() == "sqlite" {
+		tx, err := db.Beginx()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := addColumnIfNotExistsSQLite(tx, "users", "device_jid", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("ensureDeviceJID sqlite column: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_device_jid ON users(device_jid) WHERE device_jid <> ''`); err != nil {
+			return fmt.Errorf("ensureDeviceJID sqlite index: %w", err)
+		}
+		return tx.Commit()
+	}
+
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS device_jid TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("ensureDeviceJID pg column: %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_device_jid ON users(device_jid) WHERE device_jid <> ''`); err != nil {
+		return fmt.Errorf("ensureDeviceJID pg index: %w", err)
 	}
 	return nil
 }

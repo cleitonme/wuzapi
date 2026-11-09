@@ -308,15 +308,15 @@ func main() {
 	automaticPresence = configuredPresence
 	log.Info().Str("presence", string(automaticPresence)).Msg("Automatic session presence configured")
 
-  if v := os.Getenv("WUZAPI_SOCKET_RECOVERY"); v != "" {
-	enabled, err := strconv.ParseBool(v)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Invalid WUZAPI_SOCKET_RECOVERY value")
+	if v := os.Getenv("WUZAPI_SOCKET_RECOVERY"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Invalid WUZAPI_SOCKET_RECOVERY value")
+		}
+		*socketRecoveryEnabled = enabled
 	}
-	*socketRecoveryEnabled = enabled
-  }
 
-  if *versionFlag {
+	if *versionFlag {
 		fmt.Printf("WuzAPI version %s\n", version)
 		os.Exit(0)
 	}
@@ -473,6 +473,12 @@ func main() {
 	// existe no schema visível. Não-fatal: o worker tenta de novo sozinho.
 	if err := ensureWebhookOutbox(db); err != nil {
 		log.Warn().Err(err).Msg("ensureWebhookOutbox falhou no boot (worker tentará se recuperar)")
+	}
+
+	// Garante device_jid/índice fora do registro de migrations: cura
+	// deployments onde a migration 15 consta aplicada mas a coluna não existe.
+	if err := ensureDeviceJID(db); err != nil {
+		log.Warn().Err(err).Msg("ensureDeviceJID falhou no boot (exclusão de usuário pode falhar)")
 	}
 
 	// ADICIONE AQUI - Inicializar o cache ANTES de criar o server

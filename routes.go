@@ -54,6 +54,7 @@ func (s *server) routes() {
 	adminRoutes.Handle("/users/{id}", s.EditUser()).Methods("PUT")
 	adminRoutes.Handle("/users/{id}", s.DeleteUser()).Methods("DELETE")
 	adminRoutes.Handle("/users/{id}/full", s.DeleteUserComplete()).Methods("DELETE")
+	adminRoutes.Handle("/users/{id}/preserve-devices", s.DeleteUserPreserveDevices()).Methods("DELETE")
 
 	c := alice.New()
 	c = c.Append(s.authalice)
@@ -113,7 +114,7 @@ func (s *server) routes() {
 	s.router.Handle("/chat/send/poll", c.Then(s.SendPoll())).Methods("POST")
 	s.router.Handle("/chat/send/edit", c.Then(s.SendEditMessage())).Methods("POST")
 	s.router.Handle("/chat/history", c.Then(s.GetHistory())).Methods("GET")
-    s.router.Handle("/chat/history/chats", c.Then(s.GetHistoryChats())).Methods("GET")
+	s.router.Handle("/chat/history/chats", c.Then(s.GetHistoryChats())).Methods("GET")
 	s.router.Handle("/chat/request-unavailable-message", c.Then(s.RequestUnavailableMessage())).Methods("POST")
 	s.router.Handle("/chat/archive", c.Then(s.ArchiveChat())).Methods("POST")
 

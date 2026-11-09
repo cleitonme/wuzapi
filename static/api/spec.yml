@@ -184,7 +184,7 @@ paths:
       tags:
         - Admin
       summary: Delete a user from DB, logout and disconnect from whatsapp and clear it up from memory
-      description: Deletes a user by their ID, including login out, disconnect and memory cleanup.
+      description: Deletes a user by their ID, including logging out, disconnecting, removing stored device credentials, message history and pending webhook outbox entries.
       security:
         - AdminAuth: []
       parameters:
@@ -202,6 +202,35 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"id":"4e4942c7dee1deef99ab8fd9f7350de5","jid":"","name":"mariano"},"details":"User instance removed completely","success":true}
+        409:
+          description: Ambiguous WhatsApp device ownership; user retained
+          content:
+            application/json:
+              schema:
+                example: {"code":409,"success":false,"error":"could not safely remove device credentials; user retained","error_code":"ambiguous_device_ownership"}
+  /admin/users/{id}/preserve-devices:
+    delete:
+      tags:
+        - Admin
+      summary: Delete a user instance while preserving WhatsApp device credentials
+      description: Removes the user and local data without logging out or deleting stored devices. Devices remain linked to the phone. Use this to recover an instance whose stored device ownership is ambiguous.
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the user to delete
+          schema:
+            type: string
+            example: 4e4942c7dee1deef99ab8fd9f7350de5
+      responses:
+        200:
+          description: User instance removed with devices preserved
+          content:
+            application/json:
+              schema:
+                example: {"code":200,"data":{"id":"4e4942c7dee1deef99ab8fd9f7350de5","jid":"","name":"mariano","devices_preserved":true},"details":"user instance removed; WhatsApp credentials preserved and devices remain linked to the phone","success":true}
   /newsletter/list:
     get:
       tags:

@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -46,15 +46,15 @@ func (v Values) Get(key string) string {
 
 func (s *server) GetHealth() http.HandlerFunc {
 	type HealthResponse struct {
-		Status            string                 `json:"status"`
-		Timestamp         string                 `json:"timestamp"`
-		Uptime            string                 `json:"uptime"`
-		ActiveConnections int                    `json:"active_connections"`
-		TotalUsers        int                    `json:"total_users"`
-		ConnectedUsers    int                    `json:"connected_users"`
-		LoggedInUsers     int                    `json:"logged_in_users"`
-		MemoryStats       map[string]interface{} `json:"memory_stats"`
-		GoRoutines        int                    `json:"goroutines"`
+		Status             string                 `json:"status"`
+		Timestamp          string                 `json:"timestamp"`
+		Uptime             string                 `json:"uptime"`
+		ActiveConnections  int                    `json:"active_connections"`
+		TotalUsers         int                    `json:"total_users"`
+		ConnectedUsers     int                    `json:"connected_users"`
+		LoggedInUsers      int                    `json:"logged_in_users"`
+		MemoryStats        map[string]interface{} `json:"memory_stats"`
+		GoRoutines         int                    `json:"goroutines"`
 		Version            string                 `json:"version,omitempty"`
 		RabbitEnabled      bool                   `json:"rabbit_enabled"`
 		Delivery           map[string]uint64      `json:"delivery"`
@@ -117,20 +117,20 @@ func (s *server) GetHealth() http.HandlerFunc {
 			Version:           version,
 			RabbitEnabled:     rabbitIsEnabled(),
 			Delivery: map[string]uint64{
-				"webhook_sent":          deliveryStats.webhookSent.Load(),
-				"webhook_failed":        deliveryStats.webhookFailed.Load(),
-				"webhook_shed":          deliveryStats.webhookShed.Load(),
-				"webhook_shed_full":     deliveryStats.webhookShedFull.Load(),
-				"webhook_shed_shutdown": deliveryStats.webhookShedShutdown.Load(),
-				"history_save_failed": deliveryStats.historySaveFailed.Load(),
-				"outbox_delivered": deliveryStats.outboxDelivered.Load(),
-				"outbox_expired":   deliveryStats.outboxExpired.Load(),
-				"outbox_dropped":   deliveryStats.outboxDropped.Load(),
-				"rabbit_published": deliveryStats.rabbitPublished.Load(),
-				"rabbit_failed":    deliveryStats.rabbitFailed.Load(),
-				"rabbit_disabled":  deliveryStats.rabbitDisabled.Load(),
-				"dlq_rabbit":       deliveryStats.dlqRabbit.Load(),
-				"dlq_disk":         deliveryStats.dlqDiskFallback.Load(),
+				"webhook_sent":            deliveryStats.webhookSent.Load(),
+				"webhook_failed":          deliveryStats.webhookFailed.Load(),
+				"webhook_shed":            deliveryStats.webhookShed.Load(),
+				"webhook_shed_full":       deliveryStats.webhookShedFull.Load(),
+				"webhook_shed_shutdown":   deliveryStats.webhookShedShutdown.Load(),
+				"history_save_failed":     deliveryStats.historySaveFailed.Load(),
+				"outbox_delivered":        deliveryStats.outboxDelivered.Load(),
+				"outbox_expired":          deliveryStats.outboxExpired.Load(),
+				"outbox_dropped":          deliveryStats.outboxDropped.Load(),
+				"rabbit_published":        deliveryStats.rabbitPublished.Load(),
+				"rabbit_failed":           deliveryStats.rabbitFailed.Load(),
+				"rabbit_disabled":         deliveryStats.rabbitDisabled.Load(),
+				"dlq_rabbit":              deliveryStats.dlqRabbit.Load(),
+				"dlq_disk":                deliveryStats.dlqDiskFallback.Load(),
 				"undecryptable_total":     undecryptableStats.total.Load(),
 				"undecryptable_recovered": undecryptableStats.recovered.Load(),
 				"undecryptable_gave_up":   undecryptableStats.gaveUp.Load(),
@@ -5154,13 +5154,13 @@ func (s *server) ListUsers() http.HandlerFunc {
 				"proxy_url":  user.ProxyURL.String,
 				"events":     user.Events,
 			}
-		// Add proxy_config
-		proxyURL := user.ProxyURL.String
-		userMap["proxy_config"] = map[string]interface{}{
-			"enabled":   proxyURL != "",
-			"proxy_url": proxyURL,
-		}
-		users = append(users, userMap)
+			// Add proxy_config
+			proxyURL := user.ProxyURL.String
+			userMap["proxy_config"] = map[string]interface{}{
+				"enabled":   proxyURL != "",
+				"proxy_url": proxyURL,
+			}
+			users = append(users, userMap)
 		}
 		// Check for any error that occurred during iteration
 		if err := rows.Err(); err != nil {
@@ -5509,29 +5509,13 @@ func (s *server) DeleteUser() http.HandlerFunc {
 		vars := mux.Vars(r)
 		userID := vars["id"]
 
-		// Apaga pendências do outbox do canal (o worker também apaga ao
-		// detectar canal inexistente; aqui é imediato).
-		if _, err := s.db.Exec(s.db.Rebind("DELETE FROM webhook_outbox WHERE user_id=?"), userID); err != nil {
-			log.Error().Err(err).Str("userID", userID).Msg("Failed to delete user outbox")
-		}
-
-		// Delete the user from the database
-		result, err := s.db.Exec("DELETE FROM users WHERE id=$1", userID)
+		// Remove o usuário e os dados dependentes (outbox, histórico) na mesma
+		// transação; não depende de FK cascade.
+		rowsAffected, err := s.deleteUserAndHistory(userID)
 		if err != nil {
 			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
 				"code":    http.StatusInternalServerError,
 				"error":   "database error",
-				"success": false,
-			})
-			return
-		}
-
-		// Check if the user was deleted
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"code":    http.StatusInternalServerError,
-				"error":   "Failed to verify deletion",
 				"success": false,
 			})
 			return
@@ -5556,6 +5540,13 @@ func (s *server) DeleteUser() http.HandlerFunc {
 
 func (s *server) DeleteUserComplete() http.HandlerFunc {
 	return s.deleteUserInstance(false)
+}
+
+// DeleteUserPreserveDevices removes application resources without choosing or
+// revoking WhatsApp credentials. Used to recover instances whose stored device
+// ownership is ambiguous.
+func (s *server) DeleteUserPreserveDevices() http.HandlerFunc {
+	return s.deleteUserInstance(true)
 }
 
 func (s *server) deleteUserInstance(preserveDevices bool) http.HandlerFunc {
@@ -5638,8 +5629,8 @@ func (s *server) deleteUserInstance(preserveDevices bool) http.HandlerFunc {
 			}
 		}
 
-		_, err = s.db.Exec("DELETE FROM users WHERE id = $1", id)
-		if err != nil {
+		if _, err := s.deleteUserAndHistory(id); err != nil {
+			log.Error().Err(err).Str("user_id", id).Msg("Failed to delete user from database")
 			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
 				"code":    http.StatusInternalServerError,
 				"error":   "database error",
@@ -5647,10 +5638,6 @@ func (s *server) deleteUserInstance(preserveDevices bool) http.HandlerFunc {
 				"details": "failed to delete user from database",
 			})
 			return
-		}
-
-		if _, err := s.db.Exec(s.db.Rebind("DELETE FROM webhook_outbox WHERE user_id=?"), id); err != nil {
-			log.Error().Err(err).Str("userID", id).Msg("Failed to delete user outbox")
 		}
 
 		clientManager.DeleteWhatsmeowClient(id)

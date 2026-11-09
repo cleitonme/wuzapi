@@ -106,6 +106,18 @@ Response:
 }
 ```
 
+## Delete User (full)
+
+*DELETE /admin/users/{id}/full*
+
+Deletes the user, its message history and pending webhook outbox entries, logs out and disconnects the WhatsApp session, and removes the stored device credentials. If more than one stored WhatsApp device matches the account (ambiguous ownership), the request fails with `409` and `error_code: ambiguous_device_ownership`, keeping the user untouched.
+
+## Delete User preserving WhatsApp devices
+
+*DELETE /admin/users/{id}/preserve-devices*
+
+Removes the user instance and its local data without logging out or deleting WhatsApp credentials. Devices remain linked to the phone. Use this to recover an instance whose stored device ownership is ambiguous. The response includes `data.devices_preserved: true`.
+
 ---
 
 ## Webhook

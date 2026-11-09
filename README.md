@@ -220,7 +220,9 @@ Then you can use the /admin/users endpoint with the Authorization header contain
 
 - `GET /admin/users` - List all users
 - `POST /admin/users` - Create a new user
-- `DELETE /admin/users/{id}` - Remove a user
+- `DELETE /admin/users/{id}` - Remove a user and its message history/outbox (keeps WhatsApp device credentials)
+- `DELETE /admin/users/{id}/full` - Remove the user, history, outbox, session and stored device credentials
+- `DELETE /admin/users/{id}/preserve-devices` - Remove the instance but keep WhatsApp devices linked to the phone (recovery for ambiguous device ownership)
 
 The JSON body for creating a new user must contain:
 
