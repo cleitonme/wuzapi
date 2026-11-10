@@ -101,6 +101,68 @@ func TestFindSessionDeviceExactMatch(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionDevicesRemovesStaleDevicesForSoleOwner(t *testing.T) {
+	ctx := context.Background()
+	db := openDeletionTestDB(t, false)
+	s := &server{db: db}
+	seedDeletionUser(t, db, "only", "15551234567@s.whatsapp.net", "")
+
+	stores := &mockDeviceStore{devices: map[string]*store.Device{
+		"15551234567:92@s.whatsapp.net": {ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 92}},
+		"15551234567:95@s.whatsapp.net": {ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 95}},
+	}}
+
+	if err := s.deleteSessionDevicesForAccount(ctx, "only", "", "15551234567@s.whatsapp.net", stores); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stores.devices) != 0 {
+		t.Fatalf("devices remaining = %d; want 0", len(stores.devices))
+	}
+}
+
+func TestDeleteSessionDevicesRefusesWhenAccountShared(t *testing.T) {
+	ctx := context.Background()
+	db := openDeletionTestDB(t, false)
+	s := &server{db: db}
+	seedDeletionUser(t, db, "only", "15551234567@s.whatsapp.net", "")
+	seedDeletionUser(t, db, "other", "15551234567@s.whatsapp.net", "")
+
+	stores := &mockDeviceStore{devices: map[string]*store.Device{
+		"15551234567:92@s.whatsapp.net": {ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 92}},
+		"15551234567:95@s.whatsapp.net": {ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 95}},
+	}}
+
+	err := s.deleteSessionDevicesForAccount(ctx, "only", "", "15551234567@s.whatsapp.net", stores)
+	if !errors.Is(err, errAmbiguousSessionDevice) {
+		t.Fatalf("err = %v; want ambiguity", err)
+	}
+	if len(stores.devices) != 2 {
+		t.Fatalf("devices remaining = %d; want 2", len(stores.devices))
+	}
+}
+
+func TestDeleteSessionDevicesExactDeletesOnlyExact(t *testing.T) {
+	ctx := context.Background()
+	db := openDeletionTestDB(t, false)
+	s := &server{db: db}
+	seedDeletionUser(t, db, "only", "15551234567@s.whatsapp.net", "15551234567:95@s.whatsapp.net")
+
+	stores := &mockDeviceStore{devices: map[string]*store.Device{
+		"15551234567:92@s.whatsapp.net": {ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 92}},
+		"15551234567:95@s.whatsapp.net": {ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 95}},
+	}}
+
+	if err := s.deleteSessionDevicesForAccount(ctx, "only", "15551234567:95@s.whatsapp.net", "15551234567@s.whatsapp.net", stores); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := stores.devices["15551234567:95@s.whatsapp.net"]; ok {
+		t.Fatal("exact device was not deleted")
+	}
+	if _, ok := stores.devices["15551234567:92@s.whatsapp.net"]; !ok {
+		t.Fatal("non-exact device should have been preserved")
+	}
+}
+
 type unavailableDeviceStore struct{ err error }
 
 func (s unavailableDeviceStore) GetDevice(context.Context, types.JID) (*store.Device, error) {
@@ -108,6 +170,9 @@ func (s unavailableDeviceStore) GetDevice(context.Context, types.JID) (*store.De
 }
 func (s unavailableDeviceStore) GetAllDevices(context.Context) ([]*store.Device, error) {
 	return nil, s.err
+}
+func (s unavailableDeviceStore) DeleteDevice(context.Context, *store.Device) error {
+	return s.err
 }
 
 type mockDeviceStore struct {
@@ -128,4 +193,16 @@ func (m *mockDeviceStore) GetAllDevices(ctx context.Context) ([]*store.Device, e
 		devices = append(devices, d)
 	}
 	return devices, nil
+}
+
+func (m *mockDeviceStore) DeleteDevice(ctx context.Context, device *store.Device) error {
+	if device == nil || device.ID == nil {
+		return errors.New("device ID must be set")
+	}
+	key := device.ID.String()
+	if _, ok := m.devices[key]; !ok {
+		return errors.New("device not found")
+	}
+	delete(m.devices, key)
+	return nil
 }

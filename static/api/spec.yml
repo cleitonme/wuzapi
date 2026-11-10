@@ -184,7 +184,7 @@ paths:
       tags:
         - Admin
       summary: Delete a user from DB, logout and disconnect from whatsapp and clear it up from memory
-      description: Deletes a user by their ID, including logging out, disconnecting, removing stored device credentials, message history and pending webhook outbox entries.
+      description: Deletes a user by their ID, including logging out, disconnecting, removing stored device credentials, message history and pending webhook outbox entries. Stale devices matching the account are removed in bulk when no other user shares that account.
       security:
         - AdminAuth: []
       parameters:
@@ -203,7 +203,7 @@ paths:
               schema:
                 example: {"code":200,"data":{"id":"4e4942c7dee1deef99ab8fd9f7350de5","jid":"","name":"mariano"},"details":"User instance removed completely","success":true}
         409:
-          description: Ambiguous WhatsApp device ownership; user retained
+          description: Another user shares the account, so device ownership is genuinely ambiguous; user retained
           content:
             application/json:
               schema:

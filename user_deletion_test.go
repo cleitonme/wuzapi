@@ -199,6 +199,33 @@ func TestDeleteUserPreserveDevicesKeepsDeviceLink(t *testing.T) {
 	}
 }
 
+func TestDeleteUserToleratesMissingDeviceStore(t *testing.T) {
+	db := openDeletionTestDB(t, true)
+	s := &server{db: db}
+
+	const userID = "plain"
+	seedDeletionUser(t, db, userID, "15551234567@s.whatsapp.net", "")
+	seedDeletionDependents(t, db, userID, true)
+
+	previous := container
+	container = nil
+	defer func() { container = previous }()
+
+	req := mux.SetURLVars(httptest.NewRequest(http.MethodDelete, "/", nil), map[string]string{"id": userID})
+	rec := httptest.NewRecorder()
+	s.DeleteUser()(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if got := countRows(t, db, "users", "id", userID); got != 0 {
+		t.Errorf("user retained: %d", got)
+	}
+	if got := countRows(t, db, "message_history", "user_id", userID); got != 0 {
+		t.Errorf("history retained: %d", got)
+	}
+}
+
 func TestFindSessionDeviceAmbiguous(t *testing.T) {
 	stores := &mockDeviceStore{devices: make(map[string]*store.Device)}
 	stores.devices["15551234567:92@s.whatsapp.net"] = &store.Device{ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net", Device: 92}}

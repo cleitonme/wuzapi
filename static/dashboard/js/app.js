@@ -765,7 +765,7 @@ async function performDelete(id) {
     $('#instance-row-' + id).remove();
     showDeleteSuccess();
   } else if(data.error_code === 'ambiguous_device_ownership') {
-    if(confirm('Multiple WhatsApp devices match this account. Remove the instance but keep the WhatsApp credentials (devices stay linked to the phone)?')) {
+    if(confirm('Another instance shares this WhatsApp account, so the stored credentials cannot be safely chosen. Remove this instance but keep the WhatsApp credentials (devices stay linked to the phone)?')) {
       await performDeletePreservingDevices(id);
     }
   } else {

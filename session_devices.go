@@ -10,20 +10,47 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-var errAmbiguousSessionDevice = errors.New("multiple stored devices match this account; exact device ownership must be established before reconnecting or deleting")
+var errAmbiguousSessionDevice = errors.New("multiple stored devices match an account shared by another user; exact device ownership must be established before reconnecting or deleting")
 
 type sessionDeviceStore interface {
 	GetDevice(context.Context, types.JID) (*store.Device, error)
 	GetAllDevices(context.Context) ([]*store.Device, error)
+	DeleteDevice(context.Context, *store.Device) error
 }
 
 func findSessionDevice(ctx context.Context, stores sessionDeviceStore, exact, account string) (*store.Device, error) {
+	devices, err := findSessionDevices(ctx, stores, exact, account)
+	if err != nil {
+		return nil, err
+	}
+	switch len(devices) {
+	case 0:
+		return nil, nil
+	case 1:
+		return devices[0], nil
+	default:
+		return nil, errAmbiguousSessionDevice
+	}
+}
+
+// findSessionDevices devolve todos os devices que podem representar a conta.
+// O caminho exato/device continua determinístico; o caminho por conta sem
+// device pode retornar mais de um resultado, deixando a decisão para o
+// chamador (conexão recusa, exclusão tolera sobras do próprio canal).
+func findSessionDevices(ctx context.Context, stores sessionDeviceStore, exact, account string) ([]*store.Device, error) {
 	if exact != "" {
 		jid, err := types.ParseJID(exact)
 		if err != nil || jid.IsEmpty() {
 			return nil, fmt.Errorf("invalid saved device JID %q", exact)
 		}
-		return stores.GetDevice(ctx, jid)
+		device, err := stores.GetDevice(ctx, jid)
+		if err != nil {
+			return nil, err
+		}
+		if device == nil {
+			return nil, nil
+		}
+		return []*store.Device{device}, nil
 	}
 	if account == "" {
 		return nil, nil
@@ -33,23 +60,27 @@ func findSessionDevice(ctx context.Context, stores sessionDeviceStore, exact, ac
 		return nil, fmt.Errorf("invalid saved account JID %q", account)
 	}
 	if jid.Device != 0 || jid.RawAgent != 0 {
-		return stores.GetDevice(ctx, jid)
+		device, err := stores.GetDevice(ctx, jid)
+		if err != nil {
+			return nil, err
+		}
+		if device == nil {
+			return nil, nil
+		}
+		return []*store.Device{device}, nil
 	}
 	devices, err := stores.GetAllDevices(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var match *store.Device
+	var matches []*store.Device
 	for _, device := range devices {
 		if device.ID == nil || jidUserKey(device.ID.String()) != jidUserKey(account) {
 			continue
 		}
-		if match != nil {
-			return nil, errAmbiguousSessionDevice
-		}
-		match = device
+		matches = append(matches, device)
 	}
-	return match, nil
+	return matches, nil
 }
 
 func (s *server) sessionDeviceIdentity(ctx context.Context, userID string) (string, string, error) {
@@ -102,6 +133,31 @@ func (s *server) resolveDeviceStore(ctx context.Context, userID string) (*store.
 	return device, nil
 }
 
+// accountSharedByOtherUser informa se outro usuário do banco usa a mesma conta
+// (mesmo "user key" do JID). Nesse caso credenciais duplicadas não podem ser
+// escolhidas nem removidas em bloco, pois podem pertencer ao outro canal.
+func (s *server) accountSharedByOtherUser(ctx context.Context, userID, account string) (bool, error) {
+	key := jidUserKey(account)
+	if key == "" {
+		return false, nil
+	}
+	rows, err := s.db.QueryContext(ctx, s.db.Rebind(`SELECT COALESCE(jid,''), COALESCE(device_jid,'') FROM users WHERE id<>?`), userID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var jid, deviceJID string
+		if err := rows.Scan(&jid, &deviceJID); err != nil {
+			return false, err
+		}
+		if jidUserKey(jid) == key || jidUserKey(deviceJID) == key {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func (s *server) deleteSessionDevice(ctx context.Context, userID string) error {
 	exact, account, err := s.sessionDeviceIdentity(ctx, userID)
 	if err != nil {
@@ -113,17 +169,42 @@ func (s *server) deleteSessionDevice(ctx context.Context, userID string) error {
 	if container == nil {
 		return errors.New("device store is unavailable")
 	}
-	device, err := findSessionDevice(ctx, container, exact, account)
+	return s.deleteSessionDevicesForAccount(ctx, userID, exact, account, container)
+}
+
+func (s *server) deleteSessionDevicesForAccount(ctx context.Context, userID, exact, account string, stores sessionDeviceStore) error {
+	devices, err := findSessionDevices(ctx, stores, exact, account)
 	if err != nil {
 		return err
 	}
-	if device == nil {
+	if len(devices) == 0 {
 		return nil
 	}
-	if err := s.checkDeviceOwner(ctx, userID, device.ID.String(), exact == "" && account != device.ID.String()); err != nil {
-		return err
+	if len(devices) > 1 {
+		shared, err := s.accountSharedByOtherUser(ctx, userID, account)
+		if err != nil {
+			return err
+		}
+		if shared {
+			return errAmbiguousSessionDevice
+		}
 	}
-	return device.Delete(ctx)
+	var firstErr error
+	for _, device := range devices {
+		if device.ID == nil {
+			continue
+		}
+		if err := s.checkDeviceOwner(ctx, userID, device.ID.String(), exact == "" && account != device.ID.String()); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := stores.DeleteDevice(ctx, device); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func jidUserKey(jid string) string {

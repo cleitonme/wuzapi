@@ -5579,6 +5579,54 @@ func (s *server) DeleteUser() http.HandlerFunc {
 		vars := mux.Vars(r)
 		userID := vars["id"]
 
+		var exists bool
+		if err := s.db.QueryRow(s.db.Rebind(`SELECT EXISTS(SELECT 1 FROM users WHERE id=?)`), userID).Scan(&exists); err != nil {
+			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
+				"code":    http.StatusInternalServerError,
+				"error":   "database error",
+				"success": false,
+				"details": "problem checking user existence",
+			})
+			return
+		}
+		if !exists {
+			s.respondWithJSON(w, http.StatusNotFound, map[string]interface{}{
+				"code":    http.StatusNotFound,
+				"error":   "user not found",
+				"success": false,
+				"details": fmt.Sprintf("No user found with ID: %s", userID),
+			})
+			return
+		}
+
+		if err := reserveSessionDeletion(userID); err != nil {
+			s.respondWithJSON(w, http.StatusConflict, map[string]interface{}{"code": http.StatusConflict, "success": false, "error": err.Error()})
+			return
+		}
+		defer releaseSessionDeletion(userID)
+
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
+		clientManager.stopSocketRecovery(userID, false)
+		if client := clientManager.GetWhatsmeowClient(userID); client != nil {
+			if err := disconnectSessionForDeletion(cleanupCtx, client, false); err != nil {
+				log.Warn().Err(err).Str("user_id", userID).Msg("Remote logout failed; deleting local credentials")
+			}
+		}
+		signalKill(userID)
+		if err := waitForSessionStop(cleanupCtx, userID); err != nil {
+			s.respondWithJSON(w, http.StatusConflict, map[string]interface{}{"code": http.StatusConflict, "success": false, "error": "session is still stopping; retry deletion"})
+			return
+		}
+
+		// Best-effort: remove credenciais órfãs para a rota simples não deixar
+		// devices acumulados. Falhas de ambiguidade real são registradas sem
+		// impedir a remoção do usuário.
+		if err := s.deleteSessionDevice(cleanupCtx, userID); err != nil {
+			log.Warn().Err(err).Str("user_id", userID).Msg("Failed to remove device credentials during user deletion")
+		}
+
 		// Remove o usuário e os dados dependentes (outbox, histórico) na mesma
 		// transação; não depende de FK cascade.
 		rowsAffected, err := s.deleteUserAndHistory(userID)
