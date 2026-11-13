@@ -9,7 +9,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.35.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20261107160454-79dc2a8c33df
+	go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -21,7 +21,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/vincent-petithory/dataurl v1.0.0
 	golang.org/x/image v0.32.0
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	modernc.org/sqlite v1.37.1
 )
 
@@ -38,7 +38,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.64 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/term v0.47.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	modernc.org/libc v1.65.8 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
@@ -55,7 +55,7 @@ require (
 	go.mau.fi/util v0.11.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.62.0
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
 
