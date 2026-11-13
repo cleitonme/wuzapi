@@ -359,7 +359,7 @@ func (s *server) Connect() http.HandlerFunc {
 			}
 		}
 
-		response := map[string]interface{}{"webhook": webhook, "jid": jid, "events": eventstring, "details": "Connected!"}
+		response := map[string]interface{}{"success": true, "webhook": webhook, "jid": jid, "events": eventstring, "details": "Connected!"}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -5910,8 +5910,13 @@ func (s *server) SetProxy() http.HandlerFunc {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
 		// Check if client exists and is connected
-
-		if clientManager.GetWhatsmeowClient(txtid) != nil && clientManager.GetWhatsmeowClient(txtid).IsConnected() {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client != nil {
+			log.Debug().Str("userID", txtid).Bool("isConnected", client.IsConnected()).Msg("Proxy setup: client exists")
+		} else {
+			log.Debug().Str("userID", txtid).Msg("Proxy setup: no active client")
+		}
+		if client != nil && client.IsConnected() {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("cannot set proxy while connected. Please disconnect first"))
 			return
 		}
@@ -5941,7 +5946,7 @@ func (s *server) SetProxy() http.HandlerFunc {
 				log.Info().Str("userID", txtid).Msg("User info cache updated with Proxy configuration")
 			}
 
-			response := map[string]interface{}{"Details": "Proxy disabled successfully"}
+			response := map[string]interface{}{"success": true, "Details": "Proxy disabled successfully"}
 			responseJson, err := json.Marshal(response)
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, err)
@@ -5986,8 +5991,9 @@ func (s *server) SetProxy() http.HandlerFunc {
 		}
 
 		response := map[string]interface{}{
-			"Details":  "Proxy configured successfully",
-			"ProxyURL": t.ProxyURL,
+			"success":    true,
+			"Details":    "Proxy configured successfully",
+			"ProxyURL":   t.ProxyURL,
 		}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
