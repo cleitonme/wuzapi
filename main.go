@@ -81,7 +81,7 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.31"
+const version = "1.0.32"
 
 var fallbackWAVersion = store.WAVersionContainer{2, 3000, 1049558099}
 

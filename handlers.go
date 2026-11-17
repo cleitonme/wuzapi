@@ -360,15 +360,56 @@ func (s *server) Connect() http.HandlerFunc {
 		}
 
 		response := map[string]interface{}{"success": true, "webhook": webhook, "jid": jid, "events": eventstring, "details": "Connected!"}
-		responseJson, err := json.Marshal(response)
+responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
+		}
+		s.Respond(w, r, http.StatusOK, string(responseJson))
+	}
+}
+
+func getCachedPNForLID(ctx context.Context, client *whatsmeow.Client, jid types.JID) (types.JID, error) {
+	if client.Store == nil || client.Store.LIDs == nil {
+		return types.JID{}, errors.New("LID-to-PN mapping store is not available")
+	}
+	pn, err := client.Store.LIDs.GetPNForLID(ctx, jid)
+	if err != nil {
+		return types.JID{}, fmt.Errorf("could not resolve phone-number JID for LID %s: %w", jid, err)
+	}
+	if pn.IsEmpty() {
+		return types.JID{}, fmt.Errorf("could not resolve phone-number JID for LID %s", jid)
+	}
+	return pn, nil
+}
+
+func (s *server) resolveSessionJID(txtid string, waClient *whatsmeow.Client, userInfo Values) string {
+	jid := userInfo.Get("Jid")
+
+	if waClient != nil && waClient.Store != nil && waClient.IsLoggedIn() {
+		storeJID := waClient.Store.ID.ToNonAD()
+
+		if storeJID.Server == types.HiddenUserServer {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			pn, err := getCachedPNForLID(ctx, waClient, storeJID)
+			if err == nil {
+				jid = pn.String()
+			}
 		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-			return
+			jid = storeJID.String()
 		}
 	}
+
+	if jid == "" {
+		var dbJid string
+		query := s.db.Rebind("SELECT jid FROM users WHERE id = ?")
+		if err := s.db.QueryRow(query, txtid).Scan(&dbJid); err == nil && dbJid != "" {
+			jid = dbJid
+		}
+	}
+
+return jid
 }
 
 // Disconnects from Whatsapp websocket, does not log out device
@@ -873,15 +914,19 @@ func (s *server) GetStatus() http.HandlerFunc {
 
 		txtid := userInfo.Get("Id")
 
+		waClient := clientManager.GetWhatsmeowClient(txtid)
 		isConnected := false
 		isLoggedIn := false
-		if client := clientManager.GetWhatsmeowClient(txtid); client != nil {
-			isConnected = client.IsConnected()
-			isLoggedIn = client.IsLoggedIn()
+		if waClient != nil {
+			isConnected = waClient.IsConnected()
+			isLoggedIn = waClient.IsLoggedIn()
 		}
 
+		jid := s.resolveSessionJID(txtid, waClient, userInfo)
+
 		var proxyURL string
-		s.db.QueryRow("SELECT proxy_url FROM users WHERE id = $1", txtid).Scan(&proxyURL)
+		query := s.db.Rebind("SELECT proxy_url FROM users WHERE id = ?")
+		s.db.QueryRow(query, txtid).Scan(&proxyURL)
 		proxyConfig := map[string]interface{}{
 			"enabled":   proxyURL != "",
 			"proxy_url": proxyURL,
@@ -893,7 +938,7 @@ func (s *server) GetStatus() http.HandlerFunc {
 			"connected":    isConnected,
 			"loggedIn":     isLoggedIn,
 			"token":        userInfo.Get("Token"),
-			"jid":          userInfo.Get("Jid"),
+			"jid":          jid,
 			"webhook":      userInfo.Get("Webhook"),
 			"events":       userInfo.Get("Events"),
 			"proxy_url":    userInfo.Get("Proxy"),
