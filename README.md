@@ -113,6 +113,9 @@ WEBHOOK_RETRY_ENABLED=true
 WEBHOOK_RETRY_COUNT=2
 WEBHOOK_RETRY_DELAY_SECONDS=30
 WEBHOOK_ERROR_QUEUE_NAME=wuzapi_dead_letter_webhooks
+WEBHOOK_RECEIPT_CHUNK_SIZE=10
+WEBHOOK_RECEIPT_SKIP_FROM_ME=false
+WUZAPI_FORWARD_GROUP_RECEIPTS=false
 ```
 
 ### Important Notes
@@ -161,6 +164,35 @@ recovery completes.
 
 Set `WUZAPI_APPSTATE_RECOVERY=false` or pass `-appstaterecovery=false` to disable it
 (enabled by default). The environment variable overrides the flag.
+
+### Event delivery and webhook reliability
+
+Incoming WhatsApp events are handled on per-user bounded queues, not on the
+whatsmeow dispatch goroutine, so slow webhooks or heavy `HistorySync` payloads
+do not delay message acks. If a queue is full the event is processed inline
+(backpressure) instead of being dropped. On shutdown, queued events are drained
+within `-shutdowntimeout`; anything still pending is processed inline and enters
+the normal retry/outbox path. `/health` exposes `event_queue_backpressure` and
+`event_queue_spilled`.
+
+Duplicate `Message` webhooks are not suppressed: WhatsApp may redeliver the same
+message after a crypto/decryption retry, and consumers should dedupe by message
+ID when needed.
+
+`ReadReceipt` payloads with many IDs are split into small POSTs
+(`WEBHOOK_RECEIPT_CHUNK_SIZE`, 1-50, default 10). Own receipts can be skipped
+with `WEBHOOK_RECEIPT_SKIP_FROM_ME=true`. Group receipts are ignored by default;
+set `WUZAPI_FORWARD_GROUP_RECEIPTS=true` (or `-forwardgroupreceipts`) to forward
+them.
+
+If loading a user's event subscriptions fails temporarily, WuzAPI falls back to
+the last known list (or `All` on first load) instead of dropping the event.
+`/health` exposes `subscription_fallback`.
+
+`-socketrecovery` (default true, `WUZAPI_SOCKET_RECOVERY`) now actively
+registers each session: a send failing with a closed socket schedules a
+reconnect after 2 seconds, at most once per minute. Messages are not retried
+automatically.
 
 ### RabbitMQ Integration (DLQ for failed webhooks)
 WuzAPI publishes failed-webhook payloads to a RabbitMQ dead-letter queue, with on-disk spool fallback when the broker is down.

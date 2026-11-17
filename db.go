@@ -122,7 +122,7 @@ type HistoryMessage struct {
 	DataJson        string    `json:"data_json" db:"datajson"`
 }
 
-func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID, messageType, textContent, mediaLink, quotedMessageID, dataJson string) error {
+func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID string, timestamp time.Time, messageType, textContent, mediaLink, quotedMessageID, dataJson string) error {
 	query := `INSERT INTO message_history (user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
               ON CONFLICT (user_id, message_id) DO NOTHING`
@@ -130,12 +130,14 @@ func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID, mes
 		query = `INSERT OR IGNORE INTO message_history (user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	}
-	// Timeout curto: este INSERT roda na thread do handler de eventos do
-	// whatsmeow (fila sequencial). Sem timeout, um banco lento trava o
-	// recebimento de todas as mensagens da conexão.
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
+	// Timeout curto. O save não deve prender o processamento do evento por
+	// tempo indeterminado quando o banco está lento.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := s.db.ExecContext(ctx, query, userID, chatJID, senderJID, messageID, time.Now(), messageType, textContent, mediaLink, quotedMessageID, dataJson)
+	_, err := s.db.ExecContext(ctx, query, userID, chatJID, senderJID, messageID, timestamp, messageType, textContent, mediaLink, quotedMessageID, dataJson)
 	if err != nil {
 		deliveryStats.historySaveFailed.Add(1)
 		return fmt.Errorf("failed to save message to history: %w", err)

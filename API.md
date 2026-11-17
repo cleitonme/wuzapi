@@ -129,6 +129,13 @@ The following _webhook_ endpoints are used to get or set the webhook that will b
 * HistorySync
 * ChatPresence
 
+Delivery notes:
+
+* Duplicate `Message` webhooks are not suppressed; WhatsApp may redeliver the same message after a crypto/decryption retry. Consumers should dedupe by message ID.
+* Large `ReadReceipt` batches are split into chunks (`WEBHOOK_RECEIPT_CHUNK_SIZE`, default 10); set `WEBHOOK_RECEIPT_SKIP_FROM_ME=true` to skip own receipts.
+* Group receipts are ignored unless `WUZAPI_FORWARD_GROUP_RECEIPTS=true`.
+* Webhooks are retried according to `WEBHOOK_RETRY_ENABLED`, `WEBHOOK_RETRY_COUNT` and `WEBHOOK_RETRY_DELAY_SECONDS`, then persisted in the outbox.
+
 
 ## Sets webhook
 

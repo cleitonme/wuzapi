@@ -167,7 +167,7 @@ func (cm *ClientManager) UpdateMyClientSubscriptions(userID string, subscription
 	cm.Lock()
 	defer cm.Unlock()
 	if client, exists := cm.myClients[userID]; exists {
-		client.subscriptions = subscriptions
+		client.setSubscriptions(subscriptions)
 	}
 }
 

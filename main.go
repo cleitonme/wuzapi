@@ -59,6 +59,7 @@ var (
 	webhookErrorQueueName    = flag.String("errorqueue", "webhook_errors", "RabbitMQ queue name for failed webhooks")
 	webhookReceiptChunkSize  = flag.Int("receiptchunksize", 10, "Max MessageIDs per ReadReceipt webhook POST (1-50, chunks the rest)")
 	webhookReceiptSkipFromMe = flag.Bool("receiptskipfromme", true, "Skip ReadReceipt webhooks where IsFromMe=true")
+	forwardGroupReceipts     = flag.Bool("forwardgroupreceipts", false, "Forward group read/delivery receipts to the webhook")
 
 	shutdownTimeoutSeconds = flag.Int("shutdowntimeout", 60, "Max seconds to wait for in-flight webhook/Rabbit deliveries on shutdown (keep above the 30s webhook POST timeout)")
 
@@ -270,10 +271,28 @@ func main() {
 	if v := os.Getenv("WEBHOOK_RECEIPT_SKIP_FROM_ME"); v != "" {
 		*webhookReceiptSkipFromMe = strings.ToLower(v) == "true" || v == "1"
 	}
+	if v := os.Getenv("WUZAPI_FORWARD_GROUP_RECEIPTS"); v != "" {
+		*forwardGroupReceipts = strings.ToLower(v) == "true" || v == "1"
+	}
 	if v := os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 600 {
 			*shutdownTimeoutSeconds = n
 		}
+	}
+
+	// Um retry count <= 0 fazia o loop de entregas nunca executar, descartando
+	// o evento em silêncio (sem POST, outbox, DLQ ou métrica).
+	if *webhookRetryCount < 1 {
+		log.Warn().
+			Int("configured", *webhookRetryCount).
+			Msg("Webhook retry count must be >= 1; using 1")
+		*webhookRetryCount = 1
+	}
+	if *webhookRetryDelaySeconds < 0 {
+		log.Warn().
+			Int("configured", *webhookRetryDelaySeconds).
+			Msg("Webhook retry delay must be >= 0; using 0")
+		*webhookRetryDelaySeconds = 0
 	}
 
 	log.Info().
@@ -283,6 +302,7 @@ func main() {
 		Str("queue", *webhookErrorQueueName).
 		Int("receipt_chunk_size", *webhookReceiptChunkSize).
 		Bool("receipt_skip_from_me", *webhookReceiptSkipFromMe).
+		Bool("forward_group_receipts", *forwardGroupReceipts).
 		Str("dlq_spool_dir", dlqSpoolDir()).
 		Int("shutdown_timeout", *shutdownTimeoutSeconds).
 		Msg("Webhook Retry Configured")

@@ -181,10 +181,25 @@ type MyClient struct {
 	WAClient         *whatsmeow.Client
 	userID           string
 	token            string
+	subMu            sync.RWMutex
 	subscriptions    []string
 	db               *sqlx.DB
 	s                *server
 	appStateRecovery *appStateRecovery
+	eventQueue       chan eventJob
+	bulkQueue        chan eventJob
+}
+
+func (mycli *MyClient) setSubscriptions(subscriptions []string) {
+	mycli.subMu.Lock()
+	mycli.subscriptions = subscriptions
+	mycli.subMu.Unlock()
+}
+
+func (mycli *MyClient) getSubscriptions() []string {
+	mycli.subMu.RLock()
+	defer mycli.subMu.RUnlock()
+	return mycli.subscriptions
 }
 
 func sendToUserWebHook(webhookurl string, path string, jsonData []byte, userID string, token string) {
@@ -254,7 +269,7 @@ func updateAndGetUserSubscriptions(mycli *MyClient) ([]string, error) {
 	}
 
 	// Update the client subscriptions
-	mycli.subscriptions = subscribedEvents
+	mycli.setSubscriptions(subscribedEvents)
 
 	return subscribedEvents, nil
 }
@@ -283,19 +298,23 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 		return
 	}
 
-	// Prepare webhook data early para observabilidade (Undecryptable, falhas etc.).
-	jsonData, err := json.Marshal(postmap)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal postmap to JSON")
-		return
-	}
-
 	// Apenas o webhook do usuário recebe eventos (dispatch global removido).
 
 	// Get updated events from cache/database
 	subscribedEvents, err := updateAndGetUserSubscriptions(mycli)
 	if err != nil {
-		return
+		// Nunca descartar o evento por uma falha momentânea de cache/DB. Usa a
+		// última lista conhecida e, se nunca foi carregada, entrega (at-least-once).
+		subscribedEvents = mycli.getSubscriptions()
+		if len(subscribedEvents) == 0 {
+			subscribedEvents = []string{"All"}
+		}
+		deliveryStats.subscriptionFallback.Add(1)
+		log.Warn().
+			Err(err).
+			Str("userID", mycli.userID).
+			Strs("fallbackEvents", subscribedEvents).
+			Msg("Could not refresh subscriptions; using fallback instead of dropping event")
 	}
 
 	// Log subscription details for debugging
@@ -308,6 +327,12 @@ func sendEventWithWebHook(mycli *MyClient, postmap map[string]interface{}, path 
 	// Check if the current event is in the subscriptions
 	checkIfSubscribedInEvent := checkIfSubscribedToEvent(subscribedEvents, eventType, mycli.userID)
 	if !checkIfSubscribedInEvent {
+		return
+	}
+
+	jsonData, err := json.Marshal(postmap)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal postmap to JSON")
 		return
 	}
 
@@ -529,6 +554,15 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 
 	// Store the MyClient in clientManager
 	clientManager.SetMyClient(userID, &mycli)
+
+	// Processa eventos fora da goroutine de dispatch do whatsmeow.
+	mycli.startEventWorkers(ctx)
+
+	// Recupera a sessão quando um SendMessage/SendChatPresence falha com
+	// socket fechado. Antes o -socketrecovery existia mas nunca era ativado.
+	if recovery := startSocketRecovery(ctx, cancel, userID, client); recovery != nil {
+		defer clientManager.removeSocketRecovery(userID, recovery)
+	}
 
 	httpClient := resty.New()
 	httpClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
@@ -753,7 +787,13 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 	}
 }
 
+// myEventHandler apenas enfileira: o dispatch do whatsmeow não pode esperar
+// marshal de payload, escrita no banco ou chunking de recibos.
 func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
+	mycli.enqueueEvent(rawEvt)
+}
+
+func (mycli *MyClient) handleEvent(rawEvt interface{}) {
 	txtid := mycli.userID
 	postmap := make(map[string]interface{})
 	postmap["event"] = rawEvt
@@ -1178,6 +1218,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					evt.Info.Chat.String(),
 					evt.Info.Sender.String(),
 					evt.Info.ID,
+					evt.Info.Timestamp,
 					messageType,
 					textContent,
 					mediaLink,
@@ -1206,8 +1247,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 	case *events.Receipt:
-		// Ignorar receipts de grupo — só log debug
-		if evt.IsGroup {
+		// Recibos de grupo são ignorados por padrão; -forwardgroupreceipts
+		// permite encaminhá-los quando o consumidor precisa.
+		if evt.IsGroup && (forwardGroupReceipts == nil || !*forwardGroupReceipts) {
 			log.Debug().
 				Strs("id", evt.MessageIDs).
 				Str("source", evt.SourceString()).
@@ -1270,13 +1312,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 	case *events.HistorySync:
 		postmap["type"] = "HistorySync"
-		dowebhook = 1
+		// Envia o webhook antes do import: o consumidor não deve esperar o
+		// processamento pesado, que roda no bulk worker (fora do dispatch).
+		sendEventWithWebHook(mycli, postmap, path)
+		dowebhook = 0
 
 		if evt.Data != nil && evt.Data.Conversations != nil {
-			go func() {
+			func() {
 
-				// Semáforo limita a 3 syncs concorrentes; a espera acontece
-				// aqui em background (nunca na thread do handler do whatsmeow).
+				// Semáforo limita a 3 syncs concorrentes entre usuários. Roda no
+				// bulk worker (nunca na thread do handler do whatsmeow).
 				// Se a espera passar de 30s, algo está preso: loga WARN para
 				// diagnóstico em vez de acumular em silêncio.
 				waitStart := time.Now()

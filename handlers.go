@@ -117,24 +117,27 @@ func (s *server) GetHealth() http.HandlerFunc {
 			Version:           version,
 			RabbitEnabled:     rabbitIsEnabled(),
 			Delivery: map[string]uint64{
-				"webhook_sent":            deliveryStats.webhookSent.Load(),
-				"webhook_failed":          deliveryStats.webhookFailed.Load(),
-				"webhook_shed":            deliveryStats.webhookShed.Load(),
-				"webhook_shed_full":       deliveryStats.webhookShedFull.Load(),
-				"webhook_shed_shutdown":   deliveryStats.webhookShedShutdown.Load(),
-				"history_save_failed":     deliveryStats.historySaveFailed.Load(),
-				"outbox_delivered":        deliveryStats.outboxDelivered.Load(),
-				"outbox_expired":          deliveryStats.outboxExpired.Load(),
-				"outbox_dropped":          deliveryStats.outboxDropped.Load(),
-				"rabbit_published":        deliveryStats.rabbitPublished.Load(),
-				"rabbit_failed":           deliveryStats.rabbitFailed.Load(),
-				"rabbit_disabled":         deliveryStats.rabbitDisabled.Load(),
-				"dlq_rabbit":              deliveryStats.dlqRabbit.Load(),
-				"dlq_disk":                deliveryStats.dlqDiskFallback.Load(),
-				"undecryptable_total":     undecryptableStats.total.Load(),
-				"undecryptable_recovered": undecryptableStats.recovered.Load(),
-				"undecryptable_gave_up":   undecryptableStats.gaveUp.Load(),
-				"undecryptable_skipped":   undecryptableStats.skipped.Load(),
+				"webhook_sent":             deliveryStats.webhookSent.Load(),
+				"webhook_failed":           deliveryStats.webhookFailed.Load(),
+				"webhook_shed":             deliveryStats.webhookShed.Load(),
+				"webhook_shed_full":        deliveryStats.webhookShedFull.Load(),
+				"webhook_shed_shutdown":    deliveryStats.webhookShedShutdown.Load(),
+				"history_save_failed":      deliveryStats.historySaveFailed.Load(),
+				"subscription_fallback":    deliveryStats.subscriptionFallback.Load(),
+				"event_queue_backpressure": deliveryStats.eventQueueBackpressure.Load(),
+				"event_queue_spilled":      deliveryStats.eventQueueSpilled.Load(),
+				"outbox_delivered":         deliveryStats.outboxDelivered.Load(),
+				"outbox_expired":           deliveryStats.outboxExpired.Load(),
+				"outbox_dropped":           deliveryStats.outboxDropped.Load(),
+				"rabbit_published":         deliveryStats.rabbitPublished.Load(),
+				"rabbit_failed":            deliveryStats.rabbitFailed.Load(),
+				"rabbit_disabled":          deliveryStats.rabbitDisabled.Load(),
+				"dlq_rabbit":               deliveryStats.dlqRabbit.Load(),
+				"dlq_disk":                 deliveryStats.dlqDiskFallback.Load(),
+				"undecryptable_total":      undecryptableStats.total.Load(),
+				"undecryptable_recovered":  undecryptableStats.recovered.Load(),
+				"undecryptable_gave_up":    undecryptableStats.gaveUp.Load(),
+				"undecryptable_skipped":    undecryptableStats.skipped.Load(),
 			},
 		}
 		response.OutboxPending, response.OutboxOldestAge = outboxPendingStats(s.db)
@@ -360,7 +363,7 @@ func (s *server) Connect() http.HandlerFunc {
 		}
 
 		response := map[string]interface{}{"success": true, "webhook": webhook, "jid": jid, "events": eventstring, "details": "Connected!"}
-responseJson, err := json.Marshal(response)
+		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 			return
@@ -409,7 +412,7 @@ func (s *server) resolveSessionJID(txtid string, waClient *whatsmeow.Client, use
 		}
 	}
 
-return jid
+	return jid
 }
 
 // Disconnects from Whatsapp websocket, does not log out device
@@ -6036,9 +6039,9 @@ func (s *server) SetProxy() http.HandlerFunc {
 		}
 
 		response := map[string]interface{}{
-			"success":    true,
-			"Details":    "Proxy configured successfully",
-			"ProxyURL":   t.ProxyURL,
+			"success":  true,
+			"Details":  "Proxy configured successfully",
+			"ProxyURL": t.ProxyURL,
 		}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -6378,7 +6381,7 @@ func (s *server) syncHistoryForChat(ctx context.Context, userID string, chatJID 
 // save outgoing message to history
 func (s *server) saveOutgoingMessageToHistory(userID, chatJID, messageID, messageType, textContent, mediaLink string, historyLimit int) {
 	if historyLimit > 0 {
-		err := s.saveMessageToHistory(userID, chatJID, "me", messageID, messageType, textContent, mediaLink, "", "")
+		err := s.saveMessageToHistory(userID, chatJID, "me", messageID, time.Now(), messageType, textContent, mediaLink, "", "")
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to save outgoing message to history")
 		} else {

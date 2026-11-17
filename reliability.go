@@ -28,20 +28,23 @@ import (
 
 // Métricas de entrega (só memória, expostas em /health).
 var deliveryStats = struct {
-	webhookSent         atomic.Uint64
-	webhookFailed       atomic.Uint64
-	webhookShed         atomic.Uint64 // eventos desviados p/ DLQ sem tentar HTTP (semáforo cheio/shutdown)
-	webhookShedFull     atomic.Uint64 // shed por semáforo cheio (receptor lento — rajadas)
-	webhookShedShutdown atomic.Uint64 // shed por shutdown em andamento
-	historySaveFailed   atomic.Uint64 // INSERTs no message_history que falharam (gap history x webhook)
-	outboxDelivered     atomic.Uint64 // eventos do outbox entregues pelo worker
-	outboxExpired       atomic.Uint64 // pendências purgadas por retenção (3d)
-	outboxDropped       atomic.Uint64 // pendências descartadas (canal excluído / payload inválido)
-	rabbitPublished     atomic.Uint64
-	rabbitFailed        atomic.Uint64
-	rabbitDisabled      atomic.Uint64 // eventos Rabbit descartados com broker fora
-	dlqRabbit           atomic.Uint64 // DLQs entregues no Rabbit
-	dlqDiskFallback     atomic.Uint64 // DLQs preservadas em disco (Rabbit fora)
+	webhookSent            atomic.Uint64
+	webhookFailed          atomic.Uint64
+	webhookShed            atomic.Uint64 // eventos desviados p/ DLQ sem tentar HTTP (semáforo cheio/shutdown)
+	webhookShedFull        atomic.Uint64 // shed por semáforo cheio (receptor lento — rajadas)
+	webhookShedShutdown    atomic.Uint64 // shed por shutdown em andamento
+	historySaveFailed      atomic.Uint64 // INSERTs no message_history que falharam (gap history x webhook)
+	subscriptionFallback   atomic.Uint64 // eventos entregues com lista de inscrições em fallback (DB/cache fora)
+	eventQueueBackpressure atomic.Uint64 // jobs processados inline por fila cheia
+	eventQueueSpilled      atomic.Uint64 // jobs processados inline durante o shutdown
+	outboxDelivered        atomic.Uint64 // eventos do outbox entregues pelo worker
+	outboxExpired          atomic.Uint64 // pendências purgadas por retenção (3d)
+	outboxDropped          atomic.Uint64 // pendências descartadas (canal excluído / payload inválido)
+	rabbitPublished        atomic.Uint64
+	rabbitFailed           atomic.Uint64
+	rabbitDisabled         atomic.Uint64 // eventos Rabbit descartados com broker fora
+	dlqRabbit              atomic.Uint64 // DLQs entregues no Rabbit
+	dlqDiskFallback        atomic.Uint64 // DLQs preservadas em disco (Rabbit fora)
 }{}
 
 // inflightDeliveries conta entregas em background ativas (webhook/Rabbit).
@@ -120,6 +123,8 @@ func trackBackground(fn func()) {
 func waitBackground(timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
+		// Workers primeiro: eles podem despachar webhooks (bgDeliveries).
+		eventWorkers.Wait()
 		bgDeliveries.Wait()
 		close(done)
 	}()

@@ -46,10 +46,10 @@ const (
 	fetchAudioMaxBytes       = 16 * 1024 * 1024  // 16MB
 	fetchDocumentMaxBytes    = 100 * 1024 * 1024 // 100MB
 	openGraphImageMaxBytes   = 10 * 1024 * 1024  // 10MB
-	openGraphThumbnailWidth    = 192
-	openGraphThumbnailHeight   = 192
-	openGraphHQThumbnailDim    = 600
-	openGraphJpegQuality       = 80
+	openGraphThumbnailWidth  = 192
+	openGraphThumbnailHeight = 192
+	openGraphHQThumbnailDim  = 600
+	openGraphJpegQuality     = 80
 	openGraphMaxImageDim     = 4000 // Max width or height for Open Graph images
 	openGraphUserFetchLimit  = 20   // Limit concurrent Open Graph fetches per user
 
@@ -99,6 +99,7 @@ func stringMapToInterface(m map[string]string) map[string]interface{} {
 	}
 	return out
 }
+
 type openGraphResult struct {
 	Title       string
 	Description string
@@ -343,10 +344,14 @@ func callHook(myurl string, payload map[string]string, userID string) {
 		return
 	}
 
-	// Retry settings
+	// Retry settings. Um valor <= 0 faria o loop abaixo nunca executar e o
+	// evento seria descartado sem POST/outbox/DLQ.
 	maxRetries := 1
 	if *webhookRetryEnabled {
 		maxRetries = *webhookRetryCount
+		if maxRetries < 1 {
+			maxRetries = 1
+		}
 	}
 
 	// Adquire o slot SÓ para a duração dos POSTs; backoffs dormem sem slot.
@@ -481,6 +486,9 @@ func callHookFile(myurl string, payload map[string]string, userID string, file s
 	maxRetries := 1
 	if *webhookRetryEnabled {
 		maxRetries = *webhookRetryCount
+		if maxRetries < 1 {
+			maxRetries = 1
+		}
 	}
 
 	var lastError error

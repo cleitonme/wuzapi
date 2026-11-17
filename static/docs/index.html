@@ -679,6 +679,7 @@
                     </ul>
                 </div>
             </div>
+            <p><strong>Delivery notes:</strong> duplicate <code>Message</code> webhooks are not suppressed (WhatsApp may redeliver after a crypto retry; consumers should dedupe by message ID); large <code>ReadReceipt</code> batches are split into chunks (<code>WEBHOOK_RECEIPT_CHUNK_SIZE</code>); group receipts require <code>WUZAPI_FORWARD_GROUP_RECEIPTS=true</code>; failed deliveries are retried and persisted in the outbox.</p>
         </section>
 
         <section id="estrutura-webhook">

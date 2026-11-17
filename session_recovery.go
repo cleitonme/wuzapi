@@ -25,6 +25,21 @@ func newSocketRecovery(ctx context.Context, cancel context.CancelFunc, client re
 	}
 }
 
+// startSocketRecovery registra e inicia o watchdog de socket para a sessão.
+// Retorna nil quando desabilitado ou quando a sessão já foi substituída.
+func startSocketRecovery(ctx context.Context, cancel context.CancelFunc, userID string, client recoverableSocket) *socketRecovery {
+	if socketRecoveryEnabled == nil || !*socketRecoveryEnabled {
+		return nil
+	}
+	recovery := newSocketRecovery(ctx, cancel, client)
+	if !clientManager.registerSocketRecovery(userID, recovery) {
+		recovery.stop()
+		return nil
+	}
+	go recovery.run(userID, socketRecoveryGrace)
+	return recovery
+}
+
 func (r *socketRecovery) stop() {
 	r.stopOnce.Do(func() { close(r.stopped) })
 }
